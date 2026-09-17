@@ -1,0 +1,28 @@
+# Fast checks only: mypy and pytest belong to scripts/check.sh.
+# The mypy hook uses `language: system`, so run it from an activated .venv.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (framework core, strict)
+        entry: mypy
+        language: system
+        types: [python]
+        files: ^src/

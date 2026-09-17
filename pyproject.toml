@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "myagent"
+version = "0.1.0"
+description = "Modular personal agent runtime: agent loop, memory, RAG and context management"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Kyouko" }]
+keywords = ["agent", "llm", "rag", "memory", "tool-calling"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+# Phase 0 deliberately ships a dependency-free runtime: the framework core is
+# rebuilt on the standard library first, and every later dependency must be
+# justified by a phase (see docs/development.md, "依赖管理").
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-xdist>=3.6",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/myagent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# Markdown is excluded so that Python fences inside docs keep their original
+# formatting (the plan document is not source code).
+extend-exclude = [".venv", "nanobot", "*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle errors
+    "F", # pyflakes
+    "W", # pycodestyle warnings
+    "I", # isort
+    "N", # pep8-naming
+    "UP", # pyupgrade
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+    "ASYNC", # flake8-async
+    "ANN", # flake8-annotations (type annotations are a project requirement)
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN001", "ANN201", "ANN202", "ANN401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["myagent"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["myagent"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unreachable = true
+pretty = true
