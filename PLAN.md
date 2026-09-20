@@ -272,6 +272,9 @@ config/
 
 ### 1.1 理解消息流
 
+结果（2026-09-20）：消息流图与逐步说明见 `docs/architecture.md` 第 3 节（含每一步的文件行号）。
+补充了计划书图里没有展开的部分：pending queue 注入、会话内串行/跨会话并发、save 阶段的摘要检查点写入。
+
 画出：
 
 ```text
@@ -300,23 +303,23 @@ Final Response
 
 重点分析：
 
-* [ ] AgentLoop 的职责
-* [ ] 消息接收方式
-* [ ] Session 如何管理
-* [ ] Context 如何生成
-* [ ] AgentRunner 如何调用
-* [ ] Response 如何返回
+* [x] AgentLoop 的职责（`agent-loop.md` 1.0 / 1.1）
+* [x] 消息接收方式（`run()` 循环 + 命令直通 + pending queue，`agent-loop.md` 1.2）
+* [x] Session 如何管理（`agent-loop.md` 1.5，key / JSONL / provider_state / 摘要边界）
+* [x] Context 如何生成（`agent-loop.md` 1.6，`TranscriptInput` 作为原料）
+* [x] AgentRunner 如何调用（`agent-loop.md` 1.7，`AgentRunSpec` 字段对照表）
+* [x] Response 如何返回（`agent-loop.md` 1.8，`OutboundMessage` 与流式收尾）
 
 ### 1.3 理解 AgentRunner
 
 重点分析：
 
-* [ ] LLM 调用
-* [ ] Tool Calling
-* [ ] 多轮 Tool Loop
-* [ ] 最大循环次数
-* [ ] Tool Error Handling
-* [ ] Agent Termination
+* [x] LLM 调用（`agent-loop.md` 2.3，请求前先过 ContextGovernor）
+* [x] Tool Calling（`agent-loop.md` 2.4，assistant(tool_calls) → tool 消息）
+* [x] 多轮 Tool Loop（`agent-loop.md` 2.2，一次迭代的两条分支）
+* [x] 最大循环次数（`agent-loop.md` 2.5，`max_iterations` 默认 200 + `for/else` 兜底总结）
+* [x] Tool Error Handling（`agent-loop.md` 2.4，四类失败都转成可读提示 + 两个节流护栏）
+* [x] Agent Termination（`agent-loop.md` 2.5，`stop_reason` 全部取值与来源）
 
 ### 1.4 理解 Tool System
 
@@ -334,13 +337,17 @@ Tool Execution
 
 完成：
 
-* [ ] BaseTool
-* [ ] Tool Schema
-* [ ] Registry
-* [ ] Tool Call
-* [ ] Tool Result
+* [x] BaseTool（`tool-system.md` 1，抽象契约 + `read_only`/`concurrency_safe`/`exclusive`）
+* [x] Tool Schema（`tool-system.md` 1.3，手写 JSON Schema + `@tool_parameters` + 自研校验）
+* [x] Registry（`tool-system.md` 2，稳定定义顺序、缓存失效、`prepare_call` 校验网关）
+* [x] Tool Call（`tool-system.md` 4.1，按并发安全性分批 + 顺序保证）
+* [x] Tool Result（`tool-system.md` 1.2 与 4.2，`ToolResult(str)` 的 `is_error` 与四类失败语义）
 
 ### 1.5 理解 Context
+
+结果：`docs/context.md`。计划书列的 5 个组成部分之外，额外搞清了 3 件事：
+「原始转录 ≠ 模型请求」、`input_budget = context_window - max_output - 1024`、
+以及 `fit_to_budget` 的四步结构修复（裁剪 → 删孤儿 tool 结果 → 补缺失 tool 结果 → 校验能否装下）。
 
 分析 Context 中包含：
 
@@ -360,11 +367,11 @@ Other Context
 
 重点分析：
 
-* [ ] Session History
-* [ ] Long-term Memory
-* [ ] Memory Loading
-* [ ] Memory Saving
-* [ ] Memory 与 Context 的关系
+* [x] Session History（`memory.md` 2.3，`get_history` 从 `last_archived` 起重放）
+* [x] Long-term Memory（`memory.md` 1.1，SOUL / USER / MEMORY.md / history.jsonl 四个文件）
+* [x] Memory Loading（`memory.md` 4，`build_system_prompt` 读取 `MEMORY.md`）
+* [x] Memory Saving（`memory.md` 2，归档 → 摘要 → history.jsonl；Dream 改写长期记忆）
+* [x] Memory 与 Context 的关系（`memory.md` 4，两条进入路径与三个推论）
 
 ## 阶段产出
 
@@ -379,6 +386,18 @@ docs/
 └── memory.md
 ```
 
+结果（2026-09-20，均已落地）：
+
+| 文档 | 行数 | 内容 |
+| --- | ---: | --- |
+| `docs/architecture.md` | 178 | 启动路径、消息流、四条关键边界、模块地图、深入阅读索引 |
+| `docs/agent-loop.md` | 372 | AgentLoop 装配与 7 阶段流水线；AgentRunner 主循环、上限、注入、checkpoint |
+| `docs/tool-system.md` | 299 | Tool 契约、Schema、Registry、自动发现、并发执行、错误与安全边界 |
+| `docs/context.md` | 303 | system prompt 分层、transcript 组装、预算公式、四步拟合、摘要压缩、空闲压缩 |
+| `docs/memory.md` | 293 | Session vs Memory、history.jsonl、归档与摘要检查点、Dream、记忆进入上下文 |
+
+记录：`docs/records/phase-1-source-reading.md`
+
 ## 验收标准
 
 能够不看源码解释：
@@ -386,6 +405,13 @@ docs/
 > 一次 Agent 请求从输入到输出经历了什么？
 
 并能够手动画出完整架构图。
+
+结论（完整答案见 `docs/architecture.md` 3.3 与 `docs/agent-loop.md`）：输入 → `InboundMessage`
+→ `MessageBus` → `AgentLoop` 七阶段（restore / compact / command / build / run / save / respond）
+→ `build` 阶段用 `SessionManager` 历史 + `Memory` 组出 `TranscriptInput` → `AgentRunner` 在
+`max_iterations` 内循环「请求模型（请求前经 `ContextGovernor` 拟合预算、必要时摘要压缩）→ 执行工具（按
+并发安全性分批）→ 回灌 tool 结果」→ `stop_reason` 判定终止 → 写回会话与摘要检查点 → `OutboundMessage`
+与流式事件回频道。
 
 ---
 
@@ -399,86 +425,127 @@ docs/
 
 > 迁移核心思想和必要实现，同时重新设计自己的模块边界。
 
+前置：Phase 0 骨架（`src/myagent/`、`myagent.config`、`scripts/check.sh`）与 Phase 1 文档
+（迁移取舍表见 `docs/agent-loop.md` 第 3 节、`docs/tool-system.md` 第 5 节、
+`docs/context.md` 第 4 节、`docs/memory.md` 第 5 节）。
+
+产物定位：**Framework V1——能独立跑通，但不追求模块解耦**（解耦是 Phase 3 的任务）。
+
 ## 2.1 建立 Framework 目录
 
 ```text
 src/myagent/
-
 ├── agent/
-│   ├── loop.py
-│   ├── runner.py
-│   └── context.py
-│
+│   ├── loop.py            # AgentLoop：build → run → save → respond
+│   ├── runner.py          # AgentRunner：模型-工具循环
+│   ├── context.py         # ContextBuilder（Phase 6 重写为 ContextManager）
+│   └── types.py           # Message / Usage / StopReason / 事件类型
 ├── models/
-│   ├── base.py
-│   └── openai.py
-│
+│   ├── base.py            # BaseModel / LLMResponse / LLMError
+│   └── openai_compat.py   # OpenAI 兼容实现（DashScope 走同一路径）
 ├── tools/
 │   ├── base.py
 │   ├── registry.py
 │   └── builtin/
-│
 ├── memory/
-│   ├── base.py
-│   └── manager.py
-│
+│   ├── base.py            # V1：文件式记忆接口，Phase 4 换成三层实现
+│   └── store.py
 ├── session/
 │   └── manager.py
-│
-└── config/
-    └── schema.py
+├── config/                # 已存在：env.py / settings.py，Phase 2 追加 LLMSettings
+└── cli.py                 # console script: myagent chat
 ```
 
-## 2.2 Model 抽象
+依赖与决策：本阶段引入 `openai>=1.50`（OpenAI 兼容客户端）；CLI 用标准库 `argparse`
+（不引入 typer/rich，保持运行时依赖最小）；两条都记入 ADR-0006「Phase 2 新增依赖的理由」。
+
+## 2.2 Model 抽象（models/）
 
 设计：
 
 ```python
-class BaseModel:
+@dataclass(frozen=True, slots=True)
+class ToolCallRequest:
+    id: str
+    name: str
+    arguments: dict[str, Any]
 
-    def generate(self, messages):
-        ...
+@dataclass(frozen=True, slots=True)
+class LLMResponse:
+    content: str | None
+    tool_calls: list[ToolCallRequest]
+    finish_reason: str          # stop / tool_calls / length / error
+    usage: Usage | None
+
+class BaseModel(Protocol):
+    async def generate(
+        self, messages: list[Message], *, tools: list[dict[str, Any]] | None = None
+    ) -> LLMResponse: ...
+    async def stream(...) -> AsyncIterator[str]: ...      # 接口预留，V1 可只实现非流式
+    def count_tokens(self, messages, tools) -> int | None: ...   # Phase 6 的预算用
 ```
 
 实现至少一个：
 
 ```text
-OpenAI Compatible Provider
+OpenAICompatModel   → base_url 指向 DashScope 兼容端点（LLM_BASE_URL）
 ```
 
 要求：
 
-* [ ] LLM 抽象
-* [ ] Message Format
-* [ ] Tool Calling
-* [ ] Streaming（可选）
+* [ ] LLM 抽象（`BaseModel` + `LLMError` / `ContextWindowExceeded` 异常语义）
+* [ ] Message Format（user / assistant(tool_calls) / tool 三种角色，含 tool_call_id）
+* [ ] Tool Calling（`Tool.to_schema()` → OpenAI function，参数解析失败要能被上层看见）
+* [ ] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
+      `LLM_MAX_TOKENS` / `LLM_CONTEXT_WINDOW` / `AGENT_MAX_ITERATIONS`，沿用 `myagent.config` 的单入口风格）
+* [ ] `tests/test_models.py`：用假客户端验证请求形状、tool_calls 解析、错误映射（不打真实网络）
 
-## 2.3 Tool 抽象
+## 2.3 Tool 抽象（tools/）
 
 设计：
 
 ```python
-class BaseTool:
+class ToolResult(str):                 # 与上游同构：str 子类 + is_error
+    is_error: bool
+    @classmethod
+    def error(cls, content: str) -> ToolResult: ...
 
+class Tool(ABC):
     name: str
     description: str
+    @property
+    def parameters(self) -> dict[str, Any]: ...
+    read_only: bool = False            # 决定是否允许并发
+    exclusive: bool = False
 
-    def run(self, **kwargs):
-        ...
+    @property
+    def concurrency_safe(self) -> bool:
+        return self.read_only and not self.exclusive
+
+    async def execute(self, **kwargs: Any) -> ToolResult: ...
 ```
 
-实现：
+Registry（`tools/registry.py`）必须实现四件事：
 
 ```text
-Calculator
-Time
-Search
-File Reader
+register / get / get_definitions（按名字稳定排序，便于 prompt 缓存）
+prepare_call(name, params) -> (tool, params, error)   # 名字纠错 + 类型纠正 + schema 校验，不抛异常
+execute(name, params)                                  # 兜底执行入口
 ```
 
-至少 2～3 个 Tool。
+内置工具（`tools/builtin/`，全部显式注册，本阶段不做自动发现）：
 
-## 2.4 Agent Runner
+```text
+calculator     只读，用于验证参数校验与并发
+current_time   只读
+read_file      只读，限制在工作区目录内
+search_local   受控的本地检索桩（Phase 7 替换为真实论文检索）
+```
+
+* [ ] 4 个工具可被模型正确调用，参数错误时返回可读提示而不是抛异常
+* [ ] `tests/test_tools.py`：类型纠正（`"3"` → `3`）、schema 校验错误文案、名字纠错、并发分批、错误语义
+
+## 2.4 Agent Runner（agent/runner.py）
 
 实现：
 
@@ -499,14 +566,41 @@ Tool Call?
       LLM
 ```
 
+契约：
+
+```python
+@dataclass(slots=True)
+class AgentRunSpec:
+    messages: list[Message]
+    tools: ToolRegistry
+    model: BaseModel
+    max_iterations: int
+    max_tool_result_chars: int
+    hooks: list[AgentHook] | None = None
+    injection_callback: Callable[[], Awaitable[list[Message]]] | None = None
+
+@dataclass(slots=True)
+class AgentRunResult:
+    final_content: str | None
+    messages: list[Message]
+    tools_used: list[str]
+    stop_reason: str            # completed / max_iterations / error / empty_final_response
+    usage: Usage | None
+```
+
 增加：
 
-* [ ] max_iterations
-* [ ] Tool timeout
-* [ ] Tool error handling
-* [ ] termination condition
+* [ ] max_iterations（`for iteration in range(...)` + 到上限后的统一收尾）
+* [ ] Tool timeout（单工具超时 + 超时转成可读工具错误）
+* [ ] Tool error handling（工具异常/ToolResult.error → 提示文本回灌，不中断本轮）
+* [ ] Tool result 截断（`max_tool_result_chars`）
+* [ ] termination condition（`stop_reason` 四个取值 + 空回复重试上限 2）
+* [ ] 中途注入（`injection_callback`，接口保留；Loop 侧 V1 可以先不启用）
 
-## 2.5 Agent Loop
+**本阶段明确不做**（Phase 3/9 再评估）：长度续写（length recovery）、畸形 tool_calls 重试、
+provider 原生状态、三阶段 checkpoint 恢复。
+
+## 2.5 Agent Loop（agent/loop.py）
 
 完成：
 
@@ -520,6 +614,28 @@ Context
 AgentRunner
  ↓
 Response
+```
+
+阶段（比上游的 7 阶段少两个，`restore` 与 `compact` 合并进 `build`）：
+
+```text
+build    取 session 历史 → ContextBuilder 组装 messages
+run      AgentRunner.run(spec) → AgentRunResult
+save     追加新消息到 Session（JSONL，与上游一致的追加式存储）
+respond  生成 OutboundMessage / 直接返回文本
+```
+
+* [ ] 会话内串行：`asyncio.Lock` per session_key（跨会话天然并发）
+* [ ] `run_once(user_input, session_key) -> str` 供 CLI 与测试直接调用
+* [ ] `run()` 消费 `MessageBus`（Phase 2 保留最小 Bus 实现）
+* [ ] Session 存储：JSONL + `last_archived` 字段预留（Phase 4 用），不做 workspace 命名空间迁移
+
+## 2.6 CLI
+
+```bash
+myagent chat -m "现在几点？"     # 单条
+myagent chat                     # 交互（/exit、/session、/clear）
+myagent tools                    # 列出已注册工具（调试用）
 ```
 
 ## 阶段产出
@@ -544,15 +660,24 @@ Tool
 Response
 ```
 
+另外产出 `docs/design.md`（模块职责、接口签名、与上游的差异表）与
+`docs/decision-records/0006-phase2-dependencies.md`（新增依赖的理由）。
+
 ## 验收标准
 
-完全脱离 nanobot Repository 后：
+完全脱离 nanobot 仓库后：
 
 ```text
-my-agent-framework
+kyobot（src/myagent）
 ```
 
 仍然可以独立运行。
+
+具体判定：
+
+* [ ] 把 `nanobot/` 移出仓库（或删除）后，`myagent chat -m "..."` 仍能完成一次对话 + 一次工具调用
+* [ ] `scripts/check.sh` 全绿（ruff / mypy strict / pytest），新增模块覆盖率不低于 Phase 0 基线
+* [ ] 真实 transcript（含一次 calculator 或 read_file 调用）写进 `docs/records/phase-2-migration.md`
 
 ---
 
@@ -560,101 +685,175 @@ my-agent-framework
 
 ## 目标
 
-从“代码迁移”升级到“自己的 Framework 设计”。
+从「迁移过来的代码」升级为「自己的 Framework 设计」：把 Phase 2 里耦合在一起的
+Loop / Context / Tool / Model / Memory 拆成可替换的模块，再用统一的扩展点串起来。
 
-## 3.1 明确模块职责
+三个变化：
 
-最终结构：
+1. **依赖倒置**：`AgentLoop` / `AgentRunner` 只依赖接口，不依赖具体实现（OpenAI 客户端、Qdrant、SQLite）。
+2. **职责收敛**：Loop 只做「取消息 → 执行 → 回写」；上下文怎么拼、记忆怎么检索、文档怎么召回都不在 Loop 里。
+3. **扩展点显式**：新增模型、工具、记忆存储、检索器，只需实现一个 Protocol 并在装配处注册。
 
-```text
-Agent
-│
-├── AgentLoop
-├── AgentRunner
-├── ContextManager
-│
-├── SessionManager
-├── MemoryManager
-├── RAGManager
-│
-├── ToolRegistry
-└── ModelProvider
-```
+前置：Phase 2 的 Framework V1（Loop/Runner/Tools/CLI 可跑通）＋ Phase 1 的迁移取舍表
+（`docs/agent-loop.md` 第 3 节、`docs/tool-system.md` 第 5 节、`docs/context.md` 第 4 节、`docs/memory.md` 第 5 节）。
+
+产物定位：**Framework V2——模块可替换、依赖可注入**，为 Phase 4/5/6 提供接入点。
+
+## 3.1 模块职责与「不做什么」
+
+对照上游确定边界（`agent/loop.py:196` 的 `AgentLoop`、`agent/context.py:89` 的 `ContextBuilder`）：
+
+| 模块 | 负责 | 明确不负责 |
+| --- | --- | --- |
+| `AgentLoop` | 消息接收、会话内串行、turn 阶段编排、落盘、出站 | 拼 prompt、调模型、检索记忆/文档 |
+| `AgentRunner` | 模型 ↔ 工具循环、终止条件、错误回灌 | 上下文预算、会话持久化 |
+| `ContextManager` | 按优先级/预算组装 messages、结构修复、压缩 | 决定「检索什么」（它只消费检索结果） |
+| `ModelProvider` | LLM 调用与响应归一化 | 工具执行、prompt 组装 |
+| `ToolRegistry` | 工具注册、schema、参数校验、并发执行 | 决定什么时候调用工具 |
+| `SessionStore` | 转录读写、摘要检查点 | 提炼长期记忆 |
+| `MemoryManager` | 分层记忆的写入/检索/巩固 | 拼 system prompt |
+| `RagPipeline` | ingest 与检索，返回带引用的 chunk | 决定把哪些 chunk 塞进 context |
+
+上游 Loop 之所以「重」，是因为它同时承担了频道投递、cron、子 agent、崩溃恢复
+（`agent/loop.py:1594` 的 7 阶段流水线）；我们的 Loop 只保留其中的 `build / run / save / respond`
+（`agent/loop.py:1865` 组装上下文的原料、`agent/loop.py:2014` 落盘）。
 
 ## 3.2 解耦 AgentLoop
 
-AgentLoop 只负责：
-
-```text
-Message
- ↓
-Session
- ↓
-Agent Execution
- ↓
-Response
-```
-
-不直接处理：
-
-* Vector DB
-* Embedding
-* Memory Retrieval
-* Prompt 拼接细节
-
-## 3.3 解耦 Context
-
-设计：
+拆两件事：**Loop 不 new 任何东西**，**阶段可注入**。
 
 ```python
-class ContextManager:
-
-    def build(
+class AgentLoop:
+    def __init__(
         self,
-        query,
-        session,
-        memories,
-        rag_context,
-        tools
-    ):
-        ...
+        *,
+        model: BaseModel,              # 接口，而不是 OpenAICompatModel
+        tools: ToolRegistry,
+        context: ContextManager,
+        sessions: SessionStore,
+        runtime: AgentRuntimeConfig,
+    ) -> None: ...
 ```
 
-## 3.4 建立统一接口
-
-建议：
+阶段契约（每一步都是独立可测的一步，便于单测与计时）：
 
 ```text
-BaseModel
-BaseTool
-BaseMemory
-BaseRetriever
-BaseVectorStore
-BaseEmbedder
+build    (session, user_input) -> ContextRequest      # 交给 ContextManager
+run      (ContextRequest)      -> AgentRunResult      # 交给 AgentRunner
+save     (session, result)     -> None                # 交给 SessionStore
+respond  (result)              -> OutboundMessage
 ```
+
+* [ ] `AgentLoop` 构造函数里不出现 `AsyncOpenAI` / `QdrantClient` / `sqlite3` 等具体类型
+* [ ] `myagent/agent/runtime.py`：`AgentRuntimeConfig`（`max_iterations` / `tool_timeout_s` /
+      `max_tool_result_chars` / `context_budget_tokens`）集中管理运行参数——对齐上游把
+      `max_tool_iterations`、`max_tool_result_chars` 放在配置层（`config/schema.py:129`）
+* [ ] 单测：注入假 model + 假 tools + 假 context，验证 4 个阶段的调用顺序与失败传播
+
+## 3.3 ContextManager：从「拼字符串」到「可裁剪的 section」
+
+```python
+@dataclass(frozen=True, slots=True)
+class ContextSection:
+    name: str                     # system / conversation / memory / rag / tools
+    priority: int                 # 越小越先保留
+    required: bool                # 不可裁剪
+    content: str | list[Message]
+    budget_tokens: int | None
+
+class ContextManager(Protocol):
+    def build(self, request: ContextRequest) -> list[Message]: ...
+    def compact(self, session: Session) -> CompactionReport: ...
+```
+
+* V1（Phase 3）只做「section 拼装 + token 估算 + 超限报错」；真正的优先级裁剪与压缩在 Phase 6
+* 保留上游的关键区分：**原始转录 ≠ 模型请求**（`docs/context.md` 第 0 节）。因此 `build()` 的输入是
+  `history + memories + rag_chunks + tools`，输出才是待发送的 messages
+* 预留 `CompactionReport`（本轮是否压缩、压缩掉多少 token），供 Phase 6/8 使用
+
+## 3.4 统一接口（Protocol 而非 ABC）
+
+六个扩展点，全部用 `typing.Protocol`（结构类型），实现方无需继承：
+
+| 接口 | 位置 | 最小方法签名 | 实现者 |
+| --- | --- | --- | --- |
+| `BaseModel` | `models/base.py` | `generate(messages, tools) -> LLMResponse` | `OpenAICompatModel` |
+| `BaseTool` | `tools/base.py` | `execute(**kwargs) -> ToolResult` | 内置工具（上游契约参照 `agent/tools/base.py:159`） |
+| `BaseMemory` | `memory/base.py` | `add(record)` / `search(query, kind, top_k)` | Phase 4 的分层实现 |
+| `BaseEmbedder` | `rag/embedder.py` | `embed(texts) -> list[list[float]]` | `DashScopeEmbedder`（Phase 5） |
+| `BaseVectorStore` | `rag/vectorstore.py` | `upsert(...)` / `search(vector, top_k, filters)` | `QdrantVectorStore`（Phase 5） |
+| `BaseRetriever` | `rag/retriever.py` | `retrieve(query, top_k, filters) -> list[RetrievedChunk]` | `VectorRetriever`（Phase 5） |
+
+* [ ] Protocol 就近定义在各模块（或汇总到 `myagent/protocols.py`），保持「换一行 import 就能替换实现」
+* [ ] 装配只发生在 `myagent/runtime.py::build_agent(config)` 一处（见 3.5）
+* [ ] 决策记 **ADR-0007**：扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或继承抽象基类
+* [ ] `tests/test_contracts.py`：给每个 Protocol 写一个最小假实现，验证 `AgentRunner` 在不 import
+      具体实现的前提下即可工作
+
+## 3.5 装配与配置
+
+```python
+# src/myagent/runtime.py
+def build_agent(settings: Settings) -> AgentLoop: ...
+```
+
+```text
+Settings（.env）
+   │
+   ├── LLMSettings        → OpenAICompatModel
+   ├── SQLiteSettings     → SqliteSessionStore /（Phase 4）MemoryStore
+   ├── QdrantSettings     →（Phase 5）QdrantVectorStore
+   └── EmbeddingSettings  →（Phase 5）DashScopeEmbedder
+                              │
+                              ▼
+                    ContextManager + ToolRegistry + AgentLoop
+```
+
+* 复用 Phase 0/2 的配置单入口（`src/myagent/config/settings.py`）；组件**只接收 settings 对象，不读环境变量**
+* CLI 只调用 `build_agent()`，不手工 new 组件
 
 ## 阶段产出
 
 ```text
-docs/design.md
+src/myagent/
+├── runtime.py           # build_agent（唯一装配点）
+├── protocols.py         # 可选：跨模块 Protocol 汇总
+└── agent/
+    ├── loop.py          # 改为依赖注入
+    ├── runner.py        # 只依赖 BaseModel / ToolRegistry
+    ├── context.py       # ContextManager + ContextSection
+    ├── session.py       # SessionStore 接口 + JSONL 实现
+    └── runtime.py       # AgentRuntimeConfig
+docs/
+├── design.md            # 模块职责 / 接口签名 / 装配图 / 与上游差异表
+└── decision-records/0007-framework-extension-points.md
+tests/
+└── test_contracts.py
 ```
 
-记录：
-
-* 模块职责
-* 接口设计
-* 为什么这样设计
-* 与原 nanobot 的差异
+`docs/design.md` 必须包含：模块职责表（3.1）、六个接口签名（3.4）、装配图（3.5），
+以及「与上游 nanobot 的差异表」——每条差异都要给出理由与上游锚点。
 
 ## 验收标准
 
-能够解释：
+**能力判定**
+
+* [ ] 换模型（DashScope → 本地 OpenAI 兼容端点）只改 `.env`，不改业务代码
+* [ ] 新增一个工具只需 `registry.register(...)`，`AgentRunner` / `AgentLoop` 零改动
+* [ ] `AgentRunner` 的 import 里不出现 `openai` / `qdrant_client`
+* [ ] `scripts/check.sh` 全绿，`tests/test_contracts.py` 覆盖六个 Protocol
+
+**答辩判定**（答案写进 `docs/design.md`，每条都要指向上游锚点或本仓库代码）
 
 > 为什么 AgentLoop 不应该直接负责 RAG？
 
-> 为什么 Memory 和 RAG 应该抽象成独立模块？
+> 为什么 Memory 和 RAG 要拆成独立模块，而不是合并成一个 Retrieval 模块？
 
-> 为什么 Tool 需要 Registry？
+> 为什么 Tool 需要 Registry，而不是一个 dict + 分支？
+
+> 为什么用 Protocol 而不是 ABC？
+
+记录：`docs/records/phase-3-refactor.md`
 
 ---
 
@@ -662,168 +861,223 @@ docs/design.md
 
 ## 目标
 
-这是整个项目的核心改造之一。
+把 Phase 2 的「单文件长期记忆」升级为**分层 Memory Architecture**，并落进 ADR-0003 选定的
+SQLite + Qdrant。这是整个项目最核心的改造之一：上游只有一层长期记忆（`MEMORY.md`，
+`agent/memory.py:229` 读写、`agent/memory.py:253` 注入上下文），我们要回答的是
+「什么该记住、记多久、怎么召回、怎么不污染」。
 
-将简单 Memory 升级成分层 Memory Architecture。
+前置：
 
-## 4.1 Memory 分类
+* ADR-0003（SQLite 存文档/元数据，Qdrant 存向量，用 id 关联）
+* ADR-0005（DashScope embedding，`EMBED_MODEL_TYPE=dashscope`）
+* Phase 3 的 `BaseMemory` / `BaseEmbedder` / `BaseVectorStore` 契约与 `build_agent()` 装配点
 
-设计：
+## 4.0 分层模型
 
 ```text
-MemoryManager
-│
-├── Working Memory
-├── Episodic Memory
-├── Semantic Memory
-└── Memory Retriever
+MemoryManager（门面：write / search / build_context / consolidate）
+├── WorkingMemory     本轮对话窗口（不落库，直接从 Session 转录构造）
+├── EpisodicMemory    「发生过什么」：事件、任务结论、读过的论文
+├── SemanticMemory    「我知道什么」：稳定偏好、长期事实、项目知识
+└── MemoryRetriever   embedding + 向量检索 + 时间衰减
 ```
+
+| 层 | 回答什么 | 生命周期 | 写入触发 | 进向量库 | 退出路径 |
+| --- | --- | --- | --- | --- | --- |
+| Working | 这次对话到哪了 | 单次会话 | 每轮自动 | 否 | 会话结束即丢弃 |
+| Episodic | 过去发生过什么 | 天～周 | 归档检查点 + 抽取器 | 是（带时间戳） | 巩固为 Semantic 或过期清理 |
+| Semantic | 我（agent）知道什么 | 长期 | 抽取器 / 显式写入 / 巩固 | 是（不衰减） | 人工回滚 |
+
+三条设计约束：
+
+1. **不重复存储对话原文**：Working Memory 直接从 `SessionStore` 的历史构造
+   （对齐上游 `session/manager.py:344` 的 `get_history`），避免「一份对话两处存储」导致的不一致。
+2. **Session 与 Memory 的边界不变**：Session 是可重放的原文，Memory 是被提炼的结论
+   （对齐上游 `agent/memory.py:58` 的 `MemoryStore` 与 session 的分离）。
+3. **写入有策略**：不是所有对话都进长期记忆（见 4.6），否则检索会被噪声淹没。
+
+## 4.1 MemoryRecord（统一数据结构）
+
+```python
+# src/myagent/memory/types.py
+@dataclass(frozen=True, slots=True)
+class MemoryRecord:
+    id: str                              # uuid4().hex
+    kind: Literal["episodic", "semantic"]
+    text: str                            # 一条只承载一个事实，便于独立检索与失效
+    session_key: str | None              # 来源会话（Working 层不用）
+    created_at: datetime
+    importance: float                    # 0..1，写入与排序用
+    source: str                          # extractor / manual / consolidation
+    metadata: dict[str, Any]             # paper_id、tags 等
+```
+
+* [ ] 过长的抽取结果先拆句再入库，保证「删除/更新某一事实」可行
+* [ ] `text` 长度上限（默认 500 字符）与单次条数上限在**写入层**强制，而不是靠 prompt 自觉
 
 ## 4.2 Working Memory
 
-负责当前对话上下文。
-
-例如：
-
-```text
-最近 N 轮对话
-```
-
-实现：
-
-* [ ] Conversation Buffer
-* [ ] Token Limit
-* [ ] Context Window Control
+* 由 `SessionStore` 的最近 N 轮构造；N 由 `context_budget` 决定（Phase 6 接管预算）
+* 本层不落库、不 embed，只提供 `recent_turns(limit)` 视图
+* [ ] `tests/test_memory.py::test_working_memory_uses_session_history`：验证不产生额外存储
 
 ## 4.3 Episodic Memory
 
-保存过去发生的事件。
-
-例如：
-
-```text
-用户之前阅读过某篇论文。
-
-用户之前询问过 GraphRAG。
-
-用户上一次 Agent 任务的结果。
-```
-
-设计：
-
-```python
-class EpisodicMemory:
-
-    def add(...)
-    def search(...)
-```
+* 写入时机：一轮对话的 `save` 阶段之后（归档检查点，对齐上游 `agent/memory.py:996` 的 `archive_session`）
+* 记录内容：用户意图、Agent 的关键结论、工具产生的持久产物（如 `save_note`）
+* 检索：向量检索 + **时间衰减**（半衰期默认 30 天，可配）
+* [ ] `search(query, kind="episodic", top_k)`，打分 = `cosine * 0.5 ** (age_days / half_life)`
 
 ## 4.4 Semantic Memory
 
-保存长期事实。
+* 记录内容：稳定偏好（「用户偏好 Python」）、长期事实（「用户在研究 GraphRAG」）、项目知识
+* 检索：向量检索，不衰减；短 query 时用关键词兜底（向量对短句不敏感）
+* 淘汰：只允许人工或巩固流程改写，不自动过期（避免「重要偏好被时间衰减吃掉」）
 
-例如：
+## 4.5 存储层
 
-```text
-User prefers Python.
-
-User is studying RAG.
-
-User is working on an Agent project.
-```
-
-## 4.5 Memory Storage
-
-第一版可以使用：
+**SQLite（`src/myagent/memory/sqlite_store.py`）**
 
 ```text
-SQLite
-+
-Vector DB
+memories(
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,              -- episodic | semantic
+    text TEXT NOT NULL,
+    session_key TEXT,
+    created_at TEXT NOT NULL,        -- ISO8601
+    importance REAL NOT NULL,
+    source TEXT NOT NULL,
+    metadata TEXT NOT NULL           -- JSON
+)
+memory_vectors(                      -- 记录向量落库状态，避免重复 embedding
+    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    collection TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    embedded_at TEXT NOT NULL
+)
+索引：memories(kind, created_at)、memories(session_key)
 ```
 
-不需要复杂数据库架构。
+**Qdrant（`src/myagent/memory/vector_index.py`）**
 
-决策（2026-09-20，见 ADR-0003）：**SQLite** 存文档、chunk 与元数据（`MYAGENT_SQLITE_PATH`，
-默认 `data/myagent.db`）；**Qdrant** 存向量（`MYAGENT_QDRANT_URL`，本地默认 `http://localhost:6333`）。
-两者用 `document_id` / `chunk_id` 关联，通过 `SQLiteSettings` / `QdrantSettings` 读取配置，
-存储实现不直接读环境变量。
+* collection：`myagent_memories`（与文档向量 `myagent_documents` 分开）
+* payload：`{memory_id, kind, session_key, created_at}` → 检索时按 `kind` 过滤
+* 决策：记 **ADR-0008**「分层记忆的写入策略与向量命名空间」
+  * 为什么分 collection：记忆与文档的生命周期/清理策略/embedding 来源都不同。混在一个 collection 里，
+    「删掉一篇论文」可能误伤同 collection 的记忆向量；分开后 `delete(document_id)` 与
+    `delete(memory_id)` 互不影响
+  * 代价：两个 collection、配置项 +1（`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`），
+    由 `QdrantSettings` 统一提供
 
-## 4.6 Memory Retrieval
+* [ ] 存储实现只接收 `SQLiteSettings` / `QdrantSettings`（`src/myagent/config/settings.py`），不直接读 env
+* [ ] SQLite 默认 `data/myagent.db`，与 Phase 5 的 documents/chunks 同库不同表
 
-实现：
+## 4.6 写入策略（MemoryExtractor）
 
 ```text
-Query
- ↓
-Embedding
- ↓
-Vector Search
- ↓
-Top-K
- ↓
-Memory Context
+一轮对话（user + assistant + tool 结果）
+        │
+        ▼
+MemoryExtractor.extract(turn) -> list[MemoryRecord]      # LLM + JSON schema 输出候选
+        │
+        ▼
+过滤：去重（与最近 K 条余弦 > 0.95 丢弃）
+      + 重要度阈值（importance >= 0.5）
+      + 长度/条数上限（单条 500 字符、单次最多 3 条）
+        │
+        ▼
+MemoryStore.add(records) → embed → Qdrant upsert → 写 memory_vectors
 ```
 
-## 4.7 Memory 写入机制
+* 抽取用「让模型自己写记忆」（对齐上游 Dream 的思路 `agent/memory.py:543`），但**要加校验**：
+  只接受符合 schema 的记录，非法输出直接丢弃并记一条 warning
+* 规则兜底：命中「我是 / 我偏好 / 我的项目是」等模式的句子，直接进 Semantic（`importance=0.7`）
+* 明确**不写入**：闲聊、一次性查询、工具原始输出、含密钥或隐私的内容
+* [ ] `tests/test_memory.py::test_extractor_filters`：给 5 类句子，断言「写入哪些、丢弃哪些」
+* [ ] `tests/test_memory.py::test_dedup`：同一事实写入 3 次，SQLite 仍只有 1 条
 
-设计：
+## 4.7 检索（MemoryRetriever）
 
 ```text
-Conversation
- ↓
-Memory Extractor
- ↓
-判断是否值得长期保存
- ↓
-Memory Store
+query
+ ↓ embed（复用 Phase 3 的 BaseEmbedder）
+ ↓ Qdrant search(filter=kind, top_k=5)
+ ↓ 时间衰减重排（Episodic）+ 关键词兜底（Semantic）
+ ↓ MemoryContext（带 kind / 来源 / 时间，便于引用与评估）
 ```
 
-不要把所有聊天内容都写入长期 Memory。
+* 接口对齐 Phase 3 的 `BaseMemory.search`；Phase 6 的 `ContextManager` 只消费 `MemoryContext`
+* [ ] 返回结果带 `memory_id`，Phase 8 才能计算「记忆命中率」
+
+## 4.8 巩固（Consolidator，对应上游 Dream）
+
+* 触发：显式命令 `myagent memory consolidate`（**先不做定时任务**，避免运维复杂度）
+* 输入：SQLite 中 `kind="episodic"` 且未巩固的记录（按 `created_at` 增量）
+* 输出：`kind="semantic"` 的新记录 + 把被巩固的 Episodic 标记为已巩固
+* 语义对齐上游：**只有成功才前移游标**（`agent/memory.py:619` 的 `dream_run_completed`）
+* 上游参照：`agent/memory.py:1072` 的 `Consolidator`、`agent/memory.py:1103` 的 `summarize_transcript`
+
+## 4.9 CLI
+
+```bash
+myagent memory list --kind semantic -n 20
+myagent memory search "我的研究方向" -k 5
+myagent memory add "用户偏好 Python" --kind semantic --importance 0.8
+myagent memory consolidate --dry-run
+myagent memory forget <memory_id>
+```
 
 ## 阶段产出
 
 ```text
+src/myagent/memory/
+├── types.py           # MemoryRecord / MemoryContext
+├── base.py            # BaseMemory Protocol（Phase 3 定义，此处补齐实现）
+├── manager.py         # MemoryManager 门面
+├── working.py         # WorkingMemory
+├── episodic.py        # EpisodicMemory
+├── semantic.py        # SemanticMemory
+├── extractor.py       # MemoryExtractor + 过滤规则
+├── retriever.py       # MemoryRetriever（向量 + 衰减 + 关键词兜底）
+├── consolidator.py    # Consolidator（Episodic → Semantic）
+├── sqlite_store.py    # SQLite 表与读写
+└── vector_index.py    # Qdrant collection 与过滤
 docs/
-└── memory-design.md
+├── memory-design.md   # 架构 / 生命周期 / 检索 / 存储 / 注入
+└── decision-records/0008-layered-memory.md
+tests/test_memory.py
 ```
 
-包含：
-
-```text
-Memory Architecture
-Memory Lifecycle
-Memory Retrieval
-Memory Storage
-Memory Injection
-```
+`docs/memory-design.md` 必须包含：分层表（4.0）、`MemoryRecord` 字段含义、SQLite 表结构、
+Qdrant payload 与过滤、写入策略的「写/不写」清单、与上游 Dream 的对照表。
 
 ## 验收标准
 
-至少完成：
+**功能**（跨 Session 实验）
 
 ```text
-Memory OFF
-Memory ON
+Session 1  用户：我正在研究 RAG。
+Session 2  用户：我最近研究什么方向？
+Memory OFF → 无法回答（或答非所问）
+Memory ON  → 正确召回「正在研究 RAG」（带来源与时间）
 ```
 
-对比测试。
+* [ ] `myagent memory list` 能看到 Session 1 提炼出的 Semantic 记录
+* [ ] `MYAGENT_MEMORY_ENABLED=false` 后同一问题不再召回（开关口径与 Phase 8 一致）
 
-例如：
+**实验**（每组都要落进 `docs/records/phase-4-memory.md` 的表格）
 
-```text
-Session 1:
-用户：我正在研究 RAG。
+* [ ] 写入准确率：构造 20 句「偏好/事实/闲聊/一次性查询/工具输出」，人工标注是否该写入，
+      报准确率与误写率
+* [ ] 去重：同一事实重复 3 轮，断言库中只有 1 条
+* [ ] 巩固：3 条 Episodic → 1 条 Semantic，检查信息是否丢失
+* [ ] 检索：10 个记忆类问题，报 hit@5 与延迟（Phase 8 复用同一套题）
 
-Session 2:
-用户：我最近研究什么方向？
+**工程**
 
-Memory OFF:
-无法回答
-
-Memory ON:
-能够正确召回相关信息
-```
+* [ ] `scripts/check.sh` 全绿；`tests/test_memory.py` 全部离线（假 embedder + 内存向量库）
+* [ ] Qdrant 未启动时给出可读错误而不是堆栈，`myagent memory search` 有明确提示
 
 ---
 
@@ -831,146 +1085,198 @@ Memory ON:
 
 ## 目标
 
-实现一个简单、模块化的 RAG Pipeline。
+实现一个**端到端、可插拔**的 RAG Pipeline：从 PDF 进来，到「带引用的答案」出去。
+上游 nanobot **没有向量检索与 embedding**（包内搜不到相关实现），所以这部分是纯增量能力，
+也是技术面试里最容易被追问的部分。
 
-## 5.1 RAG Architecture
+前置：ADR-0003（Qdrant）、ADR-0005（DashScope embedding）、Phase 3 的
+`BaseEmbedder` / `BaseVectorStore` / `BaseRetriever` 契约、Phase 4 的 embedding 与向量写入路径。
 
-```text
-Document
- ↓
-Loader
- ↓
-Chunker
- ↓
-Embedding
- ↓
-Vector Store
- ↓
-Retriever
- ↓
-Reranker
- ↓
-Context
- ↓
-LLM
-```
-
-## 5.2 Document Loader
-
-第一版支持：
+## 5.0 Pipeline
 
 ```text
-PDF
-TXT
-Markdown
+ingest:  Document → Loader → Chunker → Embedder → VectorStore（幂等，sha256 去重）
+query:   Query → Embedder → VectorStore.search → (Reranker) → Retriever → Context
 ```
+
+## 5.1 数据模型
+
+```python
+# src/myagent/rag/types.py
+@dataclass(frozen=True, slots=True)
+class Document:
+    id: str                       # sha256 前 16 位（内容寻址）
+    source: str                   # 文件路径或 URL
+    title: str | None
+    text: str                     # 归一化全文
+    metadata: dict[str, Any]      # format / pages / sha256 / added_at
+
+@dataclass(frozen=True, slots=True)
+class Chunk:
+    id: str                       # f"{document_id}:{index}"
+    document_id: str
+    index: int
+    text: str
+    metadata: dict[str, Any]      # page / char_span / heading / token_estimate
+
+@dataclass(frozen=True, slots=True)
+class RetrievedChunk:
+    chunk: Chunk
+    score: float
+    document: Document            # 便于组装引用与标题
+```
+
+SQLite（与 Phase 4 同库 `data/myagent.db`，表不同）：
+
+```text
+documents(id TEXT PK, source TEXT, title TEXT, sha256 TEXT UNIQUE, created_at TEXT, metadata TEXT)
+chunks(id TEXT PK, document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+       idx INTEGER, text TEXT, page INTEGER, metadata TEXT)
+索引：chunks(document_id)
+```
+
+* `sha256 UNIQUE` 是幂等 ingest 的关键：同一文件重复上传只更新 `source`，不重复建 chunk
+* [ ] `tests/rag/test_store.py`：重复 ingest 后 documents/chunks 行数不变
+
+## 5.2 Loader
+
+```python
+class BaseLoader(Protocol):
+    def supports(self, path: Path) -> bool: ...
+    def load(self, path: Path) -> Document: ...
+```
+
+| 实现 | 格式 | 依赖 |
+| --- | --- | --- |
+| `TextLoader` | `.txt` | 标准库 |
+| `MarkdownLoader` | `.md` | 标准库（保留标题层级进 `metadata.heading`） |
+| `PdfLoader` | `.pdf` | `pypdf`（本阶段新增依赖，记 ADR-0009） |
+
+* 明确不做：OCR、扫描件、表格结构化、公式抽取（列为 non-goal，避免范围膨胀）
+* [ ] `tests/rag/fixtures/mini.pdf` 放一个 2 页小 PDF；测试只读本地 fixture，不打网络
 
 ## 5.3 Chunker
 
-实现：
-
-```text
-Fixed Size Chunk
+```python
+class BaseChunker(Protocol):
+    def split(self, document: Document) -> list[Chunk]: ...
 ```
 
-后续可增加：
+* V1：`FixedSizeChunker(size=800, overlap=120)`（按字符），先按段落切，超长再按句号回退，
+  让 chunk 尽量落在语义边界上
+* 预留 `RecursiveChunker`（`\n\n` → `\n` → `。` → 字符）与中文标点处理
+* chunk 的 `metadata.token_estimate` 用统一估算函数，Phase 6 的预算直接复用
+* [ ] 参数实验（Phase 8 复盘）：size = 400 / 800 / 1200 的 hit@5 与平均 chunk 长度
 
-```text
-Recursive Chunk
-```
-
-## 5.4 Embedding
-
-抽象：
+## 5.4 Embedder
 
 ```python
-class BaseEmbedder:
-
-    def embed(self, texts):
-        ...
+class BaseEmbedder(Protocol):
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+    @property
+    def dim(self) -> int: ...
 ```
 
-决策（2026-09-20，见 ADR-0005）：默认使用**阿里云 DashScope**（`EMBED_MODEL_TYPE=dashscope`，
-`EMBED_MODEL_NAME=qwen3.7-text-embedding-flash`，OpenAI 兼容模式）。配置项为
-`EMBED_MODEL_TYPE` / `EMBED_MODEL_NAME` / `EMBED_API_KEY` / `EMBED_BASE_URL` /（可选）`EMBED_DIM`，
-由 `EmbeddingSettings` 读取；`EMBED_DIM` 留空时在 Phase 5 用一次真实调用探测维度，并作为
-Qdrant collection 的向量维度。`EMBED_MODEL_TYPE` 允许切到 `openai` 作为对比基线。
+* 默认 `DashScopeEmbedder`：`EMBED_MODEL_TYPE=dashscope`、
+  `EMBED_MODEL_NAME=qwen3.7-text-embedding-flash`，走 OpenAI 兼容 `/embeddings`（ADR-0005 已定）
+* 备选 `OpenAIEmbedder`：`EMBED_MODEL_TYPE=openai`，作为对比基线
+* 维度：`EMBED_DIM` 留空时，首次 ingest 用一次真实调用探测 `len(vector)`，把结果记进
+  `.env`（`EMBED_DIM`）与 phase 记录；**Qdrant collection 的 dim 必须等于探测值**
+* 批量与重试：单次最多 `EMBED_BATCH_SIZE`（默认 16）条，失败按指数退避重试 3 次
+* [ ] 归一化默认开启（cosine 等价于点积）；维度不一致时抛可读错误
 
-## 5.5 Vector Store
-
-抽象：
+## 5.5 VectorStore
 
 ```python
-class BaseVectorStore:
-
-    def add(...)
-    def search(...)
+class BaseVectorStore(Protocol):
+    def ensure_collection(self, dim: int) -> None: ...
+    def upsert(self, chunks: list[Chunk], vectors: list[list[float]]) -> None: ...
+    def search(self, vector: list[float], top_k: int, filters: Filter | None) -> list[ScoredPoint]: ...
+    def delete_document(self, document_id: str) -> None: ...
 ```
 
-第一版使用：
-
-```text
-Qdrant
-```
-
-决策（2026-09-20，见 ADR-0003）：选 **Qdrant** 而不是 Chroma / FAISS —— 前者是完整向量数据库
-（HNSW + payload 过滤 + 持久化），后两者分别是本地库与索引文件，在生产形态与过滤语义上更弱。
-本地用 docker 启动，云端只需 url + api key，配置形状一致；`qdrant-client` 依赖在 Phase 5 引入。
+* 实现 `QdrantVectorStore`，collection 默认 `myagent_documents`（`QdrantSettings.collection`）
+* payload：`{chunk_id, document_id, page, idx}` → 支持按 `document_id` 过滤（多论文比较要用，见 Phase 7）
+* 距离用 Cosine；`ensure_collection` 幂等（已存在且维度一致则跳过）
+* 决策记 **ADR-0009**（chunk 参数 + 检索默认参数 + 是否引入 reranker 依赖），依据 Phase 8 的实验数据
 
 ## 5.6 Retriever
 
-实现：
-
 ```python
-retriever.retrieve(
-    query,
-    top_k=5
-)
+class BaseRetriever(Protocol):
+    async def retrieve(
+        self, query: str, top_k: int = 5, *, document_ids: list[str] | None = None
+    ) -> list[RetrievedChunk]: ...
 ```
 
-## 5.7 Reranker
+* `VectorRetriever`：`embed(query)` → `vectorstore.search(filters=document_ids)` → 组装 `RetrievedChunk`
+* 返回 `score` 与 `chunk.id`，这是 Phase 8 计算 hit@k 的前提
+* `HybridRetriever`（BM25 + 向量 + 融合）留到 §7.1 的可选方向
 
-第一版可选。
+## 5.7 Reranker（可选）
 
-如果时间允许：
+```python
+class BaseReranker(Protocol):
+    async def rerank(
+        self, query: str, candidates: list[RetrievedChunk], top_n: int
+    ) -> list[RetrievedChunk]: ...
+```
 
-```text
-Retriever
- ↓
-Top 10
- ↓
-Reranker
- ↓
-Top 3
+* V1 提供 `IdentityReranker`（直接截断）与 `ScoreReranker`（按现有 score 排序）
+* 模型型 rerank（cross-encoder 或 DashScope rerank API）是否引入，取决于 Phase 8：
+  **hit@3 的提升 > 延迟增量** 才引入（结论写进 ADR-0009）
+
+## 5.8 Pipeline 与 CLI
+
+```python
+# src/myagent/rag/pipeline.py
+class RagPipeline:
+    def ingest(self, paths: list[Path]) -> IngestReport: ...                 # 幂等
+    async def retrieve(
+        self, query: str, top_k: int = 5, document_ids: list[str] | None = None
+    ) -> list[RetrievedChunk]: ...
+    def build_context(self, chunks: list[RetrievedChunk]) -> str: ...        # 带 [document_id#index] 引用
+```
+
+```bash
+myagent ingest data/papers/*.pdf
+myagent search "GraphRAG 的核心思想" -k 5
+myagent docs list
+myagent docs delete <document_id>
 ```
 
 ## 阶段产出
 
 ```text
+src/myagent/rag/
+├── types.py         # Document / Chunk / RetrievedChunk
+├── loader.py        # BaseLoader + Pdf / Text / Markdown
+├── chunker.py       # FixedSizeChunker + 预留 Recursive
+├── embedder.py      # DashScopeEmbedder / OpenAIEmbedder + 维度探测
+├── vectorstore.py   # QdrantVectorStore
+├── retriever.py     # VectorRetriever
+├── reranker.py      # Identity / Score
+├── store.py         # SQLite documents / chunks
+└── pipeline.py      # RagPipeline（ingest / retrieve / build_context）
 docs/rag-design.md
-```
-
-以及：
-
-```text
-tests/rag/
+docs/decision-records/0009-chunking-and-retrieval.md
+tests/rag/{test_loader,test_chunker,test_store,test_pipeline}.py
+tests/rag/fixtures/mini.pdf
 ```
 
 ## 验收标准
 
-可以：
-
 ```text
-上传 PDF
- ↓
-建立知识库
- ↓
-提出问题
- ↓
-检索相关内容
- ↓
-LLM 回答
+上传 PDF → 建立知识库 → 提出问题 → 检索相关内容 → LLM 回答
 ```
+
+* [ ] `myagent ingest data/papers/x.pdf` 后 `myagent search "..."` 返回带 `document_id#index` 的来源
+* [ ] 端到端：检索结果经 `build_context()` 注入，回答能引用到具体 chunk（引用可信、可回跳原文）
+* [ ] 幂等：同一文件 ingest 两次，`documents` / `chunks` 行数与 Qdrant point 数不变
+* [ ] 维度探测：`EMBED_DIM` 留空 → 首次 ingest 自动探测 → collection 建立成功，且 `myagent config check` 报出维度
+* [ ] 离线测试：`pytest -m "not smoke"` 不发起任何网络请求（假 embedder + 内存向量库）
+* [ ] 实验表（进 `docs/records/phase-5-rag.md`）：chunk size 400/800/1200 的 hit@5、平均 chunk 长度、
+      检索延迟，以及「RAG OFF vs RAG ON」的定性对比
 
 ---
 
@@ -978,102 +1284,142 @@ LLM 回答
 
 ## 目标
 
-将 Memory 和 RAG 正式接入 Agent Context。
+把 Phase 4 的 Memory 与 Phase 5 的 RAG **正式接进 Agent Context**，并把「优先级 + 预算 +
+结构修复 + 压缩」做成可配置、可测试、可观测的一层。
 
-最终 Context：
+上游把这件事拆在两个文件里：`ContextBuilder`（`agent/context.py:89`，负责分层拼装）与
+`ContextGovernor`（`agent/context_governance.py:336`，负责拟合预算）；我们合并为 `ContextManager`，
+但保留它们各自的关键语义。
 
-```text
-System Instruction
-        +
-User Profile
-        +
-Recent Conversation
-        +
-Relevant Memory
-        +
-RAG Context
-        +
-Available Tools
-        ↓
-Context Manager
-        ↓
-LLM
-```
+前置：Phase 3 的 `ContextManager` / `ContextSection` 契约、Phase 4 的 `MemoryContext`、
+Phase 5 的 `RetrievedChunk`。
 
-## 6.1 Context Priority
-
-设计优先级：
+## 6.0 最终 Context 结构
 
 ```text
-System Prompt
-      ↓
-Current Query
-      ↓
-Recent Conversation
-      ↓
-Relevant Memory
-      ↓
-RAG Context
-      ↓
-Tool Information
+System Instruction       指令 + 人格（SOUL 类比）
+ + Pinned                本轮必须遵守的约束（不可裁）
+ + Recent Conversation   最近 N 轮原文
+ + Archived Summary      旧对话的摘要检查点
+ + Relevant Memory       分层记忆（带 kind / 时间 / 来源）
+ + RAG Context           文档 chunk（带引用）
+ + Tools                 工具 schema
+          ↓
+   ContextManager
+          ↓
+        LLM
 ```
 
-## 6.2 Context Budget
+每一段都是 Phase 3 定义的 `ContextSection`（`name / priority / required / content / budget_tokens`），
+这样「加了什么、裁了什么」在日志里可见，而不是藏在字符串拼接里。
 
-增加：
+## 6.1 优先级
 
 ```text
-max_context_tokens
+优先级 0  System + Pinned        required（永不裁剪）
+优先级 1  Current Query          required
+优先级 2  Recent Conversation
+优先级 3  Archived Summary
+优先级 4  Relevant Memory
+优先级 5  RAG Context
+优先级 6  Tools
 ```
 
-不同来源设置预算：
+* 数字越小越先保留；当预算不够时，从优先级最大的 section 开始降级
+* [ ] `tests/test_context.py::test_priority_order`：断言四来源同时超配时，裁剪顺序符合上表
+
+## 6.2 预算
 
 ```text
-Conversation: 30%
-Memory:      20%
-RAG:         40%
-Other:       10%
+input_budget = context_window_tokens - max_output_tokens - 1024（安全余量）
 ```
 
-具体比例根据实际测试调整。
+公式对齐上游实现（`agent/context_governance.py:693`）。各来源的**初始配额**如下，
+在 Phase 8 用实验调整（记 ADR-0010）：
 
-## 6.3 Context Compression
+| 来源 | 初始比例 | 超配额时的降级动作 |
+| --- | ---: | --- |
+| Recent Conversation | 35% | 触发 `compact()`（见 6.4） |
+| RAG Context | 35% | 减少 chunk 数（先砍低分） |
+| Relevant Memory | 20% | 减少记忆条数（先砍低重要度） |
+| Other（Pinned/Summary） | 10% | 截断摘要 |
 
-第一版可以实现简单策略：
+* [ ] `ContextBudget` 从 `AgentRuntimeConfig` 读取，不写死在 `build()` 里
+* [ ] 每次 build 产出 `ContextReport`：每段的 `budget / used / dropped`，进日志（Phase 9 结构化）
+* [ ] `tests/test_context.py::test_budget_clipping`：四来源都塞满 → 结果 token ≤ budget 且结构合法
+
+## 6.3 结构修复（顺序不能反）
+
+对齐上游 `fit_to_budget` 的四步（`agent/context_governance.py:336`、`agent/context_governance.py:951`）：
 
 ```text
-Recent Conversation
-+
-Summary of Old Conversation
+1. 按 section 预算裁剪内容
+2. 删除孤儿 tool 结果（没有对应 assistant(tool_calls) 的 tool 消息）
+3. 补上缺失的 tool 结果（有 tool_call 但没有结果 → 补占位错误消息）
+4. 校验总长装得下：装不下就抛 ContextWindowExceeded（不静默截断）
 ```
 
-而不是无限增加历史消息。
+原则：**结构合法性优先于省 token**。宁可明确报错，也不要发出一个 provider 会拒绝的请求。
+
+* [ ] `ContextWindowExceeded` 与 Phase 2 的 `LLMError` 语义对齐，CLI 给出可读提示
+* [ ] `tests/test_context.py::test_orphan_tool_repair`：构造孤儿/缺失两类畸形历史，断言修复后成对
+
+## 6.4 压缩
+
+* **显式压缩**：`myagent session compact <key>` → 把 `[0, boundary)` 的对话换成一个摘要 checkpoint，
+  原文仍留在 JSONL（对齐上游：`session/manager.py:323` 写检查点、`session/manager.py:344` 从
+  `last_archived` 重放、摘要由 `agent/memory.py:1103` 生成）
+* **自动触发**：`Recent Conversation` 超配额时先裁剪最旧的轮次，仍超则触发压缩
+* **空闲压缩**（对齐 `agent/autocompact.py:68`）：默认**关闭**，需要时用 CLI 或定时显式开启
+* [ ] 压缩报告写入 `CompactionReport`（压缩前后 token、被摘要的轮数），Phase 8 用它做「压缩 ON/OFF」实验
+
+## 6.5 集成
+
+```python
+# Phase 3 的 build_agent() 内部
+context = ContextManager(
+    budget=runtime.context_budget,
+    memory=memory_manager,      # Phase 4
+    retriever=rag_pipeline,     # Phase 5
+    token_counter=model.count_tokens,
+)
+```
+
+* 开关：`MYAGENT_MEMORY_ENABLED` / `MYAGENT_RAG_ENABLED`；关闭时对应 section 直接为空
+  （这就是 Phase 8 做 ON/OFF 实验的开关）
+* [ ] `ContextManager` 不 import `QdrantClient` / `sqlite3`：它只调用 `BaseMemory.search` 与
+      `BaseRetriever.retrieve`
 
 ## 阶段产出
 
-完整：
-
 ```text
-ContextManager
-MemoryManager
-RAGManager
+src/myagent/agent/
+├── context.py        # ContextManager / ContextSection / ContextBudget / ContextReport
+├── token_budget.py   # 统一 token 估算（Phase 5 的 chunk 估算复用同一函数）
+└── compaction.py     # compact() + 摘要策略
+docs/
+├── context-design.md # 在 Phase 1 的 docs/context.md 之上补「我们的设计」
+└── decision-records/0010-context-budget.md
+tests/test_context.py
 ```
-
-形成统一 Context Pipeline。
 
 ## 验收标准
 
-Agent 可以同时使用：
+* [ ] 一次请求的 transcript 里同时出现 `Conversation / Memory / RAG / Tools` 四段
+      （用 `myagent chat --show-context` 打印验证）
+* [ ] 预算实验：四来源塞满 → 裁剪后 token ≤ `input_budget`，且 `ContextReport` 记录了每段的降级动作
+* [ ] 压缩实验：长会话（≥ 20 轮）压缩后请求 token 下降 ≥ 40%，且 3 个探针问题仍能答对（关键信息未丢）
+* [ ] 开关实验：关掉 RAG → RAG section 为空；关掉 Memory → Memory section 为空
+* [ ] 单测覆盖：优先级、配额分配、孤儿修复、超限报错、压缩报告
+* [ ] `scripts/check.sh` 全绿
 
-```text
-Conversation
-+
-Memory
-+
-RAG
-+
-Tools
-```
+**答辩**（答案写进 `docs/context-design.md`）
+
+> Context 太长怎么办？
+
+> 为什么先删孤儿 tool 结果，而不是先删历史对话？
+
+> 为什么摘要压缩要保留原文？
 
 ---
 
@@ -1081,98 +1427,50 @@ Tools
 
 ## 目标
 
-基于自己的 Agent Framework 构建一个真正的 Agent Application。
+用自研 Framework 构建一个真实应用（Research Agent），验证可扩展性：
+**只加工具与 prompt，不改 Framework 内核**。
 
-建议项目：
+前置：Phase 4（Memory）/ Phase 5（RAG）/ Phase 6（Context）可用；新建 `examples/research_agent/`。
 
-# Research Agent
+## 7.0 场景与边界
 
-主要面向：
+面向论文阅读、技术资料研究、知识库问答。
 
-```text
-论文阅读
-技术资料研究
-知识库问答
-```
+| 场景 | 输入 | 依赖能力 |
+| --- | --- | --- |
+| 单论文问答 | 一篇 PDF + 问题 | RAG（`document_ids` 过滤） |
+| 多论文比较 | 多篇 PDF + 对比问题 | RAG 跨文档 + 引用 |
+| 跨 Session 记忆 | 两次会话 | Episodic / Semantic Memory |
+| 工具调用 | 综合问题 | Tool Calling（检索 + 笔记 + 记忆） |
 
-## 7.1 核心功能
+明确**不做**：联网抓取论文、PDF 图表理解、自动生成综述（non-goal，避免范围膨胀）。
 
-### PDF 分析
-
-```text
-Upload PDF
- ↓
-Parse
- ↓
-Chunk
- ↓
-Embedding
- ↓
-Vector DB
-```
-
-### 论文问答
-
-例如：
+## 7.1 工具
 
 ```text
-这篇论文解决了什么问题？
-
-作者提出了什么方法？
-
-实验结果如何？
-
-它和 RAG 有什么区别？
+list_papers    只读   列出已入库文档（document_id / title / 页数）
+search_paper   只读   RagPipeline.retrieve（支持 document_ids 过滤）
+read_paper     只读   按 document_id + 页范围取原文（只读 ⇒ concurrency_safe）
+save_note      写     写入 SemanticMemory（source="tool"，importance 由模型给出）
+search_memory  只读   MemoryRetriever.search
 ```
 
-### 多论文比较
+* 契约沿用 Phase 3 的 `BaseTool`（上游参照 `agent/tools/base.py:159`），注册走 `ToolRegistry`
+  （`agent/tools/registry.py:19`）
+* `read_paper` 必须限制在 `data/papers/` 内（路径护栏思想对齐上游读文件工具 `agent/tools/filesystem.py:270`）
+* [ ] `tests/examples/test_research_tools.py`：5 个工具的 schema、参数校验、错误语义
+      （`save_note` 用假 store，不打网络）
 
-```text
-Paper A
-+
-Paper B
- ↓
-RAG
- ↓
-Agent
- ↓
-Comparison
+## 7.2 Agent 装配
+
+```python
+# examples/research_agent/agent.py
+def build_research_agent(settings: Settings) -> AgentLoop:
+    return build_agent(settings, tools=research_tools, system_prompt=RESEARCH_PROMPT)
 ```
 
-### 长期 Memory
-
-例如：
-
-```text
-用户之前研究过：
-
-RAG
-GraphRAG
-Agent Memory
-```
-
-当用户再次提问时：
-
-```text
-Query
- ↓
-Memory Retrieval
- ↓
-Paper Retrieval
- ↓
-LLM
-```
-
-## 7.2 Tools
-
-实现：
-
-```text
-search_paper
-read_paper
-save_note
-search_memory
-```
+* 复用 Phase 3 的唯一装配入口 `build_agent()`；应用层只提供 **工具集合 + system prompt + 领域配置**
+* 会话用 `--session` 复用；跨 Session 演示靠 Memory，而不是把历史塞进 prompt
 
 ## 7.3 Agent Flow
 
@@ -1180,49 +1478,59 @@ search_memory
 User Query
      │
      ▼
-Research Agent
+Research Agent（build_agent 装配）
      │
-     ├──── Memory Retrieval
-     │
-     ├──── Paper RAG
-     │
-     ├──── Tool Calling
-     │
+     ├──── Memory Retrieval（search_memory / Context 自动注入）
+     ├──── Paper RAG（search_paper / read_paper）
+     ├──── Tool Calling（save_note）
      └──── LLM
               │
               ▼
-           Answer
+        Answer（带 [document_id#index] 引用）
+```
+
+## 7.4 Prompt 与引用规范
+
+`prompts.py` 里的 system prompt 必须写清这四条：
+
+```text
+1. 先检索再回答（search_paper / search_memory）；检索不到就明说「知识库中没有」
+2. 引用格式 [<document_id>#<index>]，回答里的每个事实都要带引用
+3. 长文比较时先分别总结再对比，分别给出引用
+4. 用户偏好与关键结论用 save_note 落库，不要把无价值闲聊写进记忆
+```
+
+* [ ] 引用可回跳：拿到 `[doc#idx]` 能在 `myagent docs show <doc>` 里定位到原文
+
+## 7.5 CLI
+
+```bash
+myagent research ingest data/papers/*.pdf
+myagent research chat --session work
+myagent research ask "这篇论文解决了什么问题？" --paper <document_id>
+myagent search "GraphRAG" -k 5
 ```
 
 ## 阶段产出
 
 ```text
-examples/
-└── research_agent/
+examples/research_agent/
+├── agent.py
+├── tools.py
+├── prompts.py
+└── README.md
+docs/research-agent.md
+docs/records/phase-7-research-agent.md   # 4 个 Demo 的 transcript + token / 延迟
 ```
 
-包含：
+## 验收标准（4 个 Demo）
 
-```text
-agent.py
-tools.py
-prompts.py
-README.md
-```
-
-## 验收标准
-
-至少完成以下 Demo：
-
-```text
-Demo 1：单论文问答
-
-Demo 2：多论文比较
-
-Demo 3：跨 Session Memory
-
-Demo 4：RAG + Tool Calling
-```
+* [ ] **Demo 1 单论文问答**：同一篇论文追问 3 个问题，答案均带引用，人工判定正确
+* [ ] **Demo 2 多论文比较**：`document_ids` 过滤生效，回答同时引用 ≥ 2 篇论文
+* [ ] **Demo 3 跨 Session Memory**：Session A 建立「研究方向 / 偏好」，新 Session 提问能召回
+* [ ] **Demo 4 RAG + Tool Calling**：一次对话内既检索论文，又调用 `save_note` / `search_memory`
+* [ ] 每个 Demo 记录轮数、工具调用次数、token、延迟（Phase 8 直接复用）
+* [ ] 拒答场景：问知识库里没有的内容时，明确回答「知识库中没有」，不编造事实
 
 ---
 
@@ -1230,114 +1538,94 @@ Demo 4：RAG + Tool Calling
 
 ## 目标
 
-证明 Framework 的改造确实产生了效果，而不是单纯增加代码。
+用**可复现的离线评测**证明改造确实有效：Memory 有用、RAG 有用、参数选择有依据。
+关键不是分数好看，而是「同一数据集、同一套指标、能一键复跑」。
 
-## 8.1 建立 Evaluation Dataset
+前置：Phase 5 的 pipeline、Phase 6 的开关与 `ContextReport`、Phase 7 的 4 个 Demo 场景。
 
-准备：
+## 8.1 数据集
 
 ```text
-20～50 个测试问题
+evaluation/
+├── dataset/questions.jsonl     # 全部题目
+└── dataset/papers/             # 题目引用的 PDF（或指向 data/papers 的软链）
 ```
-
-格式：
 
 ```json
-{
-    "question": "...",
-    "expected_answer": "...",
-    "source": "..."
-}
+{"id": "q001", "type": "single_paper", "question": "...", "answer": "...",
+ "gold_chunk_ids": ["<document_id>:3"], "source": "papers/x.pdf"}
 ```
 
-## 8.2 Memory Evaluation
+* 20～50 条，覆盖四类：`single_paper` / `compare` / `memory` / `refusal`（库里没有，应当拒答）
+* 拆 `dev`（调参）/ `test`（只跑一次出结论），避免过拟合到指标（记 ADR-0011）
+* `gold_chunk_ids` 只标注**能回答该问题的 chunk**，用于检索指标；`answer` 用于人工 / LLM-judge 判分
 
-比较：
+## 8.2 指标
 
-```text
-Memory OFF
-vs
-Memory ON
+| 层级 | 指标 | 定义 | 数据来源 |
+| --- | --- | --- | --- |
+| Retrieval | `hit@k` | top-k 里是否含任一 `gold_chunk_id` | `search_paper` 返回 |
+| Retrieval | `MRR@k` | 第一个 gold chunk 的倒数排名 | 同上 |
+| Retrieval | `p50/p95 latency` | 检索耗时 | 结构化日志（Phase 9） |
+| Memory | `memory_hit@k` | 记忆题是否召回正确记忆 | `search_memory` 返回 |
+| Answer | `accuracy` | LLM-judge 1–5 分（≥4 记正确）+ 人工抽检 20% | `evaluation/judge.py` |
+| Answer | `citation_rate` | 带有效引用的回答占比 | 正则解析 `[doc#idx]` |
+| Agent | `avg_turns / avg_tool_calls / avg_tokens / avg_latency` | 每题均值 | `AgentRunResult` + 日志 |
+| Context | `request_tokens` | 每轮请求 token | `ContextReport` |
+
+* judge 使用固定 prompt + 与产出回答不同的模型；样本小就诚实标注「仅看趋势」
+
+## 8.3 对比实验
+
+每组一张表，全部写进 `docs/evaluation.md`：
+
+| # | 变量 | 对照 | 观察指标 |
+| --- | --- | --- | --- |
+| 1 | Memory | `MYAGENT_MEMORY_ENABLED=true/false` | `memory_hit@5`、`accuracy`、`request_tokens` |
+| 2 | RAG | `MYAGENT_RAG_ENABLED=true/false` | `hit@5`、`accuracy`、拒答题误答率 |
+| 3 | Top-K | 3 / 5 / 10 | `hit@k`、`latency`、`request_tokens` |
+| 4 | Chunk size | 400 / 800 / 1200 | `hit@5`、平均 chunk 长度 |
+| 5 | Reranker | Identity / Score /（可选）模型 | `hit@3`、`latency` |
+| 6 | 压缩 | compact ON/OFF | `request_tokens`、探针问题正确率 |
+
+## 8.4 框架
+
+```python
+# evaluation/evaluate.py
+async def run_suite(suite: str, config: EvalConfig) -> EvalReport: ...
 ```
 
-指标：
-
-```text
-Memory Retrieval Hit Rate
-Answer Accuracy
-```
-
-## 8.3 RAG Evaluation
-
-比较：
-
-```text
-RAG OFF
-vs
-RAG ON
-```
-
-指标：
-
-```text
-Retrieval Hit Rate
-Answer Accuracy
-```
-
-## 8.4 Retrieval Evaluation
-
-测试：
-
-```text
-Top-K = 3
-Top-K = 5
-Top-K = 10
-```
-
-记录：
-
-```text
-Hit Rate
-Latency
-```
-
-## 8.5 Agent Evaluation
-
-记录：
-
-```text
-平均执行时间
-平均 Token 使用量
-Tool Call 次数
-Agent Loop 次数
-最终回答准确率
-```
+* 固定随机种子；LLM 输出按 `(question_id, config_hash)` 缓存到 `evaluation/.cache/`，保证可复跑且省钱
+* `--offline` 模式用 mock provider，验证评测代码本身能在 CI 里跑
 
 ## 阶段产出
 
 ```text
 evaluation/
-├── dataset.json
-├── evaluate.py
-├── results.json
+├── dataset/questions.jsonl
+├── metrics.py        # hit@k / MRR / accuracy / citation_rate
+├── judge.py          # LLM-judge（固定 prompt + 独立模型）
+├── evaluate.py       # run_suite / 缓存 / 报告
+├── results.json      # 每次运行的原始结果
 └── README.md
-```
-
-最终生成：
-
-```text
 docs/evaluation.md
+docs/decision-records/0011-evaluation-protocol.md
 ```
 
 ## 验收标准
 
-能够回答：
+* [ ] `python evaluation/evaluate.py --suite all --out evaluation/results.json` 一键跑完并可复跑（结果稳定）
+* [ ] 6 组对比都有 delta 表，且每条结论都能指到 `results.json` 的具体字段
+* [ ] `evaluation/evaluate.py --offline` 在 CI 里通过（不打网络）
+* [ ] `docs/evaluation.md` 能直接用数据回答：
 
-> 你的 Memory 为什么有效？
+> 你的 Memory 为什么有效？（`memory_hit@5` 与 `accuracy` 的 delta）
 
-> RAG 加入以后有什么变化？
+> RAG 加入以后有什么变化？（`hit@5` / `accuracy` / 拒答题误答率）
 
-> Retrieval 的 Top-K 为什么选择这个值？
+> Retrieval 的 Top-K 为什么选择这个值？（`hit@k` 与 `latency`、`request_tokens` 的权衡）
+
+> Chunk size / reranker 的取舍依据是什么？
 
 ---
 
@@ -1345,71 +1633,55 @@ docs/evaluation.md
 
 ## 目标
 
-让项目从“学习项目”变成“可以展示的工程项目”。
+让项目从「能跑的学习项目」变成「别人能装、能跑、能测的工程项目」。
 
-## 9.1 Logging
+前置：Phase 1–8 的功能已可用；已有质量门 `scripts/check.sh`（format → lint → type → test + coverage）。
 
-记录：
+## 9.1 结构化日志
 
-```text
-Agent Start
-LLM Call
-Tool Call
-Memory Retrieval
-RAG Retrieval
-Agent Finish
-```
+在 Phase 0 的 `src/myagent/observability/logging.py`（命名空间 `myagent.*`、text / JSON 双格式）
+之上，定义**统一事件名 + 字段表**，而不是散落的 `print` 或 `logger.info("...")`：
 
-例如：
+| 事件 | 时机 | 关键字段 |
+| --- | --- | --- |
+| `agent.turn.start` / `agent.turn.finish` | Loop 的一轮 turn 前后 | `session_key`, `stop_reason`, `turns`, `latency_ms` |
+| `llm.call` | 每次模型请求 | `model`, `input_tokens`, `output_tokens`, `latency_ms` |
+| `tool.call` | 每次工具执行 | `tool`, `ok`, `latency_ms`, `concurrency_batch` |
+| `memory.write` / `memory.search` | 记忆写入 / 检索 | `kind`, `count`, `top_score` |
+| `rag.ingest` / `rag.retrieve` | 入库 / 检索 | `documents`, `chunks`, `top_k`, `top_score` |
+| `context.build` | 每次组装上下文 | `budget_tokens`, `used_tokens`, `dropped_tokens`, `compacted` |
 
-```text
-[Agent] start
-[Memory] retrieved 3 memories
-[RAG] retrieved 5 chunks
-[LLM] tool call: search_paper
-[Tool] finished
-[Agent] completed
-```
+* 事件与字段的形态参考上游把压缩做成结构化事件的做法（`events.py:17` 的 `ContextCompactionEvent`）
+* 用 `extra={...}` 传字段，JSON 模式下可被 `jq` 直接筛选
+* [ ] 日志**不打印密钥**，也不打印完整文档正文（只记 id 与长度）
+* [ ] 能用一条命令从 JSON 日志重建「一次 turn 的事件时间线」
 
-## 9.2 Configuration
+## 9.2 配置
 
-统一：
-
-```yaml
-model:
-  provider: openai
-  model: xxx
-
-memory:
-  enabled: true
-  top_k: 5
-
-rag:
-  enabled: true
-  top_k: 5
-
-agent:
-  max_iterations: 10
-```
+* **保留 `.env` 为唯一真源**（ADR-0004）；新增 `.env.example`（占位值、不含密钥）与
+  `docs/configuration.md`（`LLM_*` / `EMBED_*` / `MYAGENT_*` 全部配置项、默认值、是否必填）
+* `myagent config show`：打印解析后的配置（密钥打码）
+* `myagent config check`：启动自检——SQLite 可写、Qdrant 可达、embedding 可调用、collection 维度一致
+* 原计划里的 YAML 配置**不再引入**：多一套配置格式意味着两处真源，与 ADR-0004 冲突。
+  若确需 dev/prod 覆盖，用 `--config-file <toml>` 覆盖层，并记 **ADR-0012** 说明边界
 
 ## 9.3 Docker
 
-提供：
-
 ```text
-Dockerfile
-docker-compose.yml
+Dockerfile              多阶段构建（builder 装依赖，runtime 只带 venv + src）
+docker-compose.yml      services: qdrant + app（app 挂载 ./data 与 .env）
 ```
-
-至少可以启动：
 
 ```bash
-docker compose up
+docker compose up -d qdrant
+docker compose run --rm app myagent config check
+docker compose run --rm app myagent ingest data/papers/*.pdf
 ```
 
-## 9.4 Tests
+* 对齐上游交付形态（`nanobot/Dockerfile`、`nanobot/docker-compose.yml`），但不搬运其频道 / WebUI 相关服务
+* [ ] 镜像里不含密钥；`data/` 与 `.env` 通过 volume / 环境注入
 
-至少覆盖：
+## 9.4 测试与质量门
 
 ```text
 tests/
@@ -1417,16 +1689,39 @@ tests/
 ├── test_tools.py
 ├── test_memory.py
 ├── test_rag.py
-└── test_context.py
+├── test_context.py
+├── test_models.py
+├── test_settings.py
+├── rag/{test_loader,test_chunker,test_store,test_pipeline}.py
+└── smoke/{test_llm_smoke,test_qdrant_smoke}.py    # 默认跳过
 ```
 
-重点测试：
+* 默认 `pytest -m "not smoke"`：全部离线（假 provider / 假 embedder / 内存向量库 / 临时 SQLite）
+* 覆盖率门：整体 ≥ 75%；核心模块（`agent/runner.py`、`tools/`、`agent/context.py`、
+  `memory/sqlite_store.py`）≥ 90%
+* `scripts/check.sh` 加上 `pytest -m "not smoke"` 与覆盖率阈值断言；pre-commit 覆盖 `examples/`、`evaluation/`
+* CI：`.github/workflows/ci.yml` 在 push / PR 上跑 `scripts/check.sh`
 
-* [ ] Agent Loop
-* [ ] Tool Calling
-* [ ] Memory Retrieval
-* [ ] RAG Retrieval
-* [ ] Context Construction
+## 阶段产出
+
+```text
+Dockerfile
+docker-compose.yml
+.env.example
+.github/workflows/ci.yml
+docs/configuration.md
+docs/decision-records/0012-configuration-source.md
+docs/records/phase-9-engineering.md
+```
+
+## 验收标准
+
+* [ ] 干净环境按 README 走通：`docker compose up -d qdrant` → `myagent config check` →
+      `myagent ingest` → `myagent research ask "..."` 全部成功
+* [ ] `scripts/check.sh` 全绿且覆盖率达标
+* [ ] CI 在 push 上跑通
+* [ ] JSON 日志能选出一条完整 turn 的事件序列（README 里给出 `jq` 命令）
+* [ ] 仓库里不存在真实密钥（`git grep` 检查 + `.gitignore` 覆盖 `.env`、`data/`）
 
 ---
 
@@ -1434,199 +1729,183 @@ tests/
 
 ## 目标
 
-把项目从“代码”包装成一个完整的工程作品。
+把工程变成「5 分钟能看懂、能跑起来、能记住亮点」的作品。所有宣称都必须能找到证据。
 
 ## 10.1 README 结构
 
 ```text
-# MyAgent
+# MyAgent — Modular Agent Runtime & Research Agent
 
-## Introduction
-
-## Features
-
-## Architecture
-
-## Quick Start
-
-## Agent Runtime
-
-## Memory
-
-## RAG
-
-## Research Agent
-
-## Evaluation
-
-## Project Structure
-
-## Design Decisions
-
-## Future Work
-
-## Acknowledgements
+## Introduction        一段话：是什么、为什么做、与 nanobot 的关系（学习 + 重构，非 fork）
+## Features            能力清单，每条链接到对应文档
+## Architecture        系统图 + 一轮请求时序（Phase 1 的图 + Phase 3 的装配图）
+## Quick Start         .env → docker compose up → ingest → chat（可复制粘贴的命令）
+## Agent Runtime       Loop / Runner / Tool Registry / Model Provider → docs/agent-loop.md、docs/tool-system.md
+## Memory              分层记忆、写入策略、检索 → docs/memory-design.md
+## RAG                 Pipeline、chunk 策略、检索参数 → docs/rag-design.md
+## Context             优先级 / 预算 / 压缩 → docs/context-design.md
+## Research Agent      4 个 Demo + GIF → docs/research-agent.md
+## Evaluation          指标表 + 关键结果 → docs/evaluation.md、evaluation/results.json
+## Project Structure   目录树
+## Design Decisions    ADR 索引（0001–0012，每条一句话结论）
+## Limitations         诚实写清：不做多模态、不联网抓论文、评测样本规模有限
+## Future Work         §7 的可选方向（Hybrid Retrieval / Query Rewrite / Consolidation …）
+## Acknowledgements    上游 nanobot 与许可说明
 ```
 
-## 10.2 Architecture Diagram
+## 10.2 架构图
 
-最终 README 至少展示：
+README 顶部要有两张图（mermaid 或导出 PNG 均可）：
 
 ```text
-                 User
-                  │
-                  ▼
-            ┌───────────┐
-            │ AgentLoop │
-            └─────┬─────┘
-                  │
-          ┌───────▼────────┐
-          │ ContextManager │
-          └───────┬────────┘
-                  │
-       ┌──────────┼──────────┐
-       ▼          ▼          ▼
-    Memory       RAG       Tools
-       │          │          │
-       └──────────┼──────────┘
-                  ▼
-                LLM
-                  │
-                  ▼
-              Response
+图 1：系统组成
+                     User
+                      │
+                      ▼
+                ┌───────────┐     ┌──────────────────┐
+                │ AgentLoop │────▶│ ContextManager   │
+                └─────┬─────┘     └────────┬─────────┘
+                      │                    │
+              ┌───────▼───────┐     ┌──────┴───────┬──────────┐
+              │  AgentRunner  │     ▼              ▼          ▼
+              └───────┬───────┘   Memory         RAG        Tools
+                      ▼              │            │           │
+                     LLM ◀───────────┴────────────┴───────────┘
+                      │
+                      ▼
+                  Response
+
+图 2：一轮请求（build → run → save → respond）里 Memory / RAG / Tools 的介入点
 ```
 
-## 10.3 Demo GIF / 视频
+## 10.3 Demo
 
-准备一个 1～3 分钟 Demo：
+3 分钟脚本（录成 GIF + 视频）：
 
 ```text
-1. 启动 Agent
-2. 上传论文
-3. 询问论文内容
-4. Agent 进行 RAG
-5. 调用 Tool
-6. 保存 Memory
-7. 新 Session
-8. 再次询问
-9. 展示 Memory Recall
+1. myagent config check                          # 环境自检
+2. myagent ingest data/papers/*.pdf              # 建库（展示 chunks 数）
+3. myagent research ask "这篇论文解决了什么问题？"   # 单篇 + 引用
+4. myagent research ask "对比 A 与 B 的方法"       # 多篇比较
+5. myagent memory list                           # 展示被保存的偏好 / 结论
+6. myagent research chat --session new           # 新会话
+7. 问「我最近在研究什么方向？」                      # 跨 Session 记忆召回
+8. 打开 docs/evaluation.md 展示指标表              # 量化结果
 ```
 
 ## 10.4 技术亮点
 
-README 中重点突出：
+每条亮点都要指向证据，不写没有依据的形容词：
 
 ```text
-✓ Modular Agent Runtime
-✓ Tool Calling
-✓ Layered Memory
-✓ Long-term Memory Retrieval
-✓ RAG Pipeline
-✓ Context Management
-✓ Vertical Agent
-✓ Evaluation
+✓ Modular Agent Runtime      → docs/design.md（Protocol + 装配注入，替换实现零改动）
+✓ Tool Calling               → docs/tool-system.md（schema 校验 + 并发分批 + 错误语义）
+✓ Layered Memory             → docs/memory-design.md（写入过滤 + 去重 + 巩固）
+✓ Long-term Memory Retrieval → docs/evaluation.md（memory_hit@5 / accuracy 的 delta）
+✓ RAG Pipeline               → docs/rag-design.md（幂等 ingest + 引用可回跳）
+✓ Context Management         → docs/context-design.md（优先级 / 预算 / 压缩实验）
+✓ Vertical Agent             → docs/research-agent.md（4 个 Demo）
+✓ Evaluation                 → evaluation/results.json（6 组对比）
 ```
+
+## 10.5 简历条目
+
+每条都要带**可验证的数字**（取自 `results.json`），不要形容词：
+
+```text
+Framework   重新实现轻量模块化 Agent Runtime（Loop / Runner / Tool Registry / Model Provider /
+            Session / Context Manager），通过 Protocol + 装配注入解耦，替换模型/工具/存储实现无需改业务代码。
+Memory      设计 Working / Episodic / Semantic 三层记忆，实现写入过滤（去重 + 重要度阈值）、
+            时间衰减检索与 Episodic→Semantic 巩固；跨 Session 记忆题 hit@5 = xx%，
+            相比关闭记忆准确率 +xx pt。
+RAG         构建模块化 RAG Pipeline（Loader / Chunker / Embedder / VectorStore / Retriever / Reranker），
+            基于 Qdrant + DashScope embedding，支持内容寻址幂等入库与按文档过滤检索；
+            chunk 400/800/1200 对比后选定 xxx，hit@5 = xx%。
+Application 基于自研 Runtime 实现 Research Agent（论文问答 / 多论文比较 / 跨会话记忆 / 工具调用），
+            并建立离线 Evaluation Pipeline，覆盖检索、记忆、回答与成本四类指标。
+```
+
+## 阶段产出
+
+```text
+README.md（重写）
+docs/architecture.md（更新为最终版）
+docs/decision-records/（0001–0012 索引）
+docs/demo/（GIF / 视频脚本 / 截图）
+docs/records/phase-10-package.md    # 发布快照：tag / commit / 指标
+```
+
+## 验收标准
+
+* [ ] 陌生读者只看 README，5 分钟内能在干净环境跑通 `config check → ingest → ask`
+* [ ] README 里每条「亮点」都能点到一个文档章节或 `results.json` 字段（没有无证据的形容词）
+* [ ] Demo GIF 展示完 10.3 的 8 步，可离线播放
+* [ ] `docs/records/phase-10-package.md` 记录发布时的 commit / tag 与关键指标
+* [ ] ADR 索引能覆盖 §8 原则三里列出的所有「为什么这样设计」问题
 
 ---
 
 # 4. 最终项目目录
 
-最终建议形成：
+最终形态（仓库根即工程根，见 ADR-0001）：
 
 ```text
-my-agent-framework/
+kyobot/
 │
-├── README.md
-├── PLAN.md
-├── LICENSE
-├── pyproject.toml
-├── Dockerfile
-├── docker-compose.yml
+├── README.md  PLAN.md  LICENSE
+├── pyproject.toml             # hatchling + ruff / mypy / pytest 配置
+├── Dockerfile  docker-compose.yml
+├── .env.example  .pre-commit-config.yaml  .gitignore
 │
-├── src/
-│   └── myagent/
-│       │
-│       ├── agent/
-│       │   ├── loop.py
-│       │   ├── runner.py
-│       │   └── context.py
-│       │
-│       ├── models/
-│       │   ├── base.py
-│       │   └── openai.py
-│       │
-│       ├── tools/
-│       │   ├── base.py
-│       │   ├── registry.py
-│       │   └── builtin/
-│       │
-│       ├── memory/
-│       │   ├── base.py
-│       │   ├── manager.py
-│       │   ├── working.py
-│       │   ├── episodic.py
-│       │   ├── semantic.py
-│       │   └── retriever.py
-│       │
-│       ├── rag/
-│       │   ├── document.py
-│       │   ├── loader.py
-│       │   ├── chunker.py
-│       │   ├── embedder.py
-│       │   ├── vectorstore.py
-│       │   ├── retriever.py
-│       │   └── pipeline.py
-│       │
-│       ├── session/
-│       │   └── manager.py
-│       │
-│       └── config/
-│           └── schema.py
+├── src/myagent/
+│   ├── agent/                 # loop.py / runner.py / context.py / session.py / runtime.py / types.py
+│   ├── models/                # base.py（BaseModel）/ openai_compat.py
+│   ├── tools/                 # base.py / registry.py / builtin/
+│   ├── memory/                # types / base / manager / working / episodic / semantic /
+│   │                          # extractor / retriever / consolidator / sqlite_store / vector_index
+│   ├── rag/                   # types / loader / chunker / embedder / vectorstore /
+│   │                          # retriever / reranker / store / pipeline
+│   ├── session/               # manager.py（JSONL + 摘要检查点）
+│   ├── config/                # env.py / settings.py / schema.py
+│   ├── observability/         # logging.py（text / JSON 双格式）
+│   ├── runtime.py             # build_agent()：唯一装配入口
+│   └── cli.py                 # chat / tools / ingest / search / docs / memory / research / config
 │
-├── examples/
-│   └── research_agent/
-│       ├── agent.py
-│       ├── tools.py
-│       └── README.md
+├── examples/research_agent/   # agent.py / tools.py / prompts.py / README.md
 │
-├── tests/
-│   ├── test_agent.py
-│   ├── test_tools.py
-│   ├── test_memory.py
-│   ├── test_rag.py
-│   └── test_context.py
+├── evaluation/                # dataset/ metrics.py judge.py evaluate.py results.json README.md
 │
-├── evaluation/
-│   ├── dataset.json
-│   ├── evaluate.py
-│   └── results.json
+├── tests/                     # test_*.py + rag/ + smoke/（默认跳过）
 │
-└── docs/
-    ├── architecture.md
-    ├── design.md
-    ├── memory-design.md
-    ├── rag-design.md
-    ├── evaluation.md
-    └── decision-records/
+├── scripts/                   # bootstrap.sh / check.sh / check_doc_anchors.py
+│
+├── docs/
+│   ├── architecture.md · agent-loop.md · tool-system.md · context.md · memory.md   # Phase 1
+│   ├── design.md · memory-design.md · rag-design.md · context-design.md            # Phase 3–6
+│   ├── research-agent.md · evaluation.md · configuration.md                        # Phase 7–9
+│   ├── records/               # phase-0 … phase-10 工作记录
+│   └── decision-records/      # ADR-0001 … 0012
+│
+└── nanobot/                   # 上游只读参照（git ignored，见 ADR-0002）
 ```
 
 ---
 
 # 5. 每阶段核心产出
 
-| 阶段       | 核心产出             | 验收标准                     |
-| -------- | ---------------- | ------------------------ |
-| Phase 0  | 开发环境             | nanobot 跑通               |
-| Phase 1  | 源码分析文档           | 能讲清 Agent Runtime        |
-| Phase 2  | 自己的 Framework V1 | 独立运行 Agent               |
-| Phase 3  | Framework 重构     | 模块职责清晰                   |
-| Phase 4  | Memory V2        | 跨 Session 记忆             |
-| Phase 5  | RAG Pipeline     | PDF → Retrieval → Answer |
-| Phase 6  | Context Manager  | Memory + RAG + Tools     |
-| Phase 7  | Research Agent   | 完成真实 Demo                |
-| Phase 8  | Evaluation       | 有量化实验结果                  |
-| Phase 9  | 工程化              | Test + Docker + Logging  |
-| Phase 10 | 项目包装             | GitHub + Demo + 简历       |
+| 阶段 | 核心产出 | 验收标准（可判定） |
+| --- | --- | --- |
+| Phase 0 | 开发环境 + 仓库骨架 | `scripts/bootstrap.sh` 可复现；nanobot 跑通 |
+| Phase 1 | 5 份带行号锚点的源码文档 | `scripts/check_doc_anchors.py` 全绿；能讲清一次请求 |
+| Phase 2 | Framework V1 | 删除 `nanobot/` 后 `myagent chat` 仍可对话 + 工具调用 |
+| Phase 3 | Framework V2（可注入 / 可替换） | 换模型只改 `.env`；Runner 不 import 具体实现 |
+| Phase 4 | 分层 Memory | 跨 Session 召回 + 写入/去重/巩固三类实验表 |
+| Phase 5 | RAG Pipeline | 幂等 ingest + 带引用回答 + 维度探测 |
+| Phase 6 | Context Manager | 四来源预算裁剪 + 压缩实验 + 开关实验 |
+| Phase 7 | Research Agent | 4 个 Demo 全部可复现 |
+| Phase 8 | Evaluation | 一键复跑 + 6 组对比 delta 表 |
+| Phase 9 | 工程化 | `docker compose` 全流程 + CI + 覆盖率门 |
+| Phase 10 | 项目包装 | README 5 分钟上手 + Demo + 指标可追溯 |
 
 ---
 
@@ -1637,36 +1916,43 @@ my-agent-framework/
 优先完成以下 MVP：
 
 ```text
-                    MyAgent
-                       │
-        ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
-     Agent          Memory           RAG
-        │              │              │
-        ▼              ▼              ▼
-   Tool Calling    Long-term       PDF Search
-        │           Memory             │
-        └──────────────┼───────────────┘
-                       ▼
-                    LLM
-                       │
-                       ▼
-                Research Agent
+                       MyAgent
+                          │
+           ┌──────────────┼──────────────┐
+           ▼              ▼              ▼
+        Agent          Memory           RAG
+           │              │              │
+           ▼              ▼              ▼
+      Tool Calling    Long-term       PDF Search
+           │           Memory             │
+           └──────────────┼───────────────┘
+                          ▼
+                   Context Manager
+                          │
+                          ▼
+                   Research Agent
+                          │
+                          ▼
+                     Evaluation
 ```
 
-MVP 必须具备：
+MVP = Phase 0–8 的最小交集，每项都要有可判定的完成条件：
 
-* [ ] Agent Loop
-* [ ] Tool Calling
-* [ ] Session
-* [ ] Memory
-* [ ] Vector Retrieval
-* [ ] RAG
-* [ ] Context Manager
-* [ ] Research Agent
-* [ ] 基础 Evaluation
+* [ ] Agent Loop + Runner（会话内串行、`max_iterations`、工具错误回灌）
+* [ ] Tool Calling（schema 校验 + 并发分批 + 错误语义）
+* [ ] Session（JSONL + `last_archived` 边界 + 摘要检查点）
+* [ ] Memory（Episodic/Semantic 分开、写入过滤、向量召回）
+* [ ] Vector Retrieval（Qdrant + DashScope embedding，按文档过滤）
+* [ ] RAG（PDF → chunk → embedding → 带引用回答）
+* [ ] Context Manager（优先级 + 预算 + 结构修复 + 压缩）
+* [ ] Research Agent（4 个 Demo）
+* [ ] 基础 Evaluation（≥ 6 组对比、可复跑）
 
-其他功能全部属于 Nice to Have。
+Nice to Have（不阻塞 MVP）：Hybrid Retrieval、Query Rewrite、模型型 Reranker、定时巩固、
+MCP / 多频道 / WebUI、Multi-Agent。
+
+判定口径：MVP 完成 = 以上 9 项全部勾选，且 `scripts/check.sh` 全绿、
+`evaluation/results.json` 含 ≥ 6 组对比。
 
 ---
 
@@ -1707,6 +1993,9 @@ Semantic Memory
 ```
 
 ## 7.4 Agent Observability
+
+> Phase 9.1 已交付「事件名 + 字段表」的结构化日志；这一节指的是在它之上的可视化 Trace 视图（时间线 / 瀑布图），
+> 属于 MVP 之后的增强。
 
 增加：
 
