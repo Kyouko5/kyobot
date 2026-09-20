@@ -4,6 +4,10 @@
 > **路径约定**：`agent/memory.py:58` 指上游包内的 `nanobot/nanobot/agent/memory.py` 第 58 行。
 > 核心文件：`agent/memory.py`（存储 / 归档 / 整合）、
 > `session/manager.py`（会话历史）、`session/summary.py`（摘要检查点）。
+>
+> 本文只讲**上游**的机制。我们自己的实现（四层记忆、写入策略、检索与巩固，
+> Phase 4）见 [`docs/memory-design.md`](./memory-design.md)；
+> 「上游 → 本项目」的落地对照见本文 §5.1。
 
 ## 0. 心智模型：Session 与 Memory 是两件事
 
@@ -277,6 +281,19 @@ ctx.history = session.get_history(extend_to_user=is_subagent)
 | 单一 `MEMORY.md` | **拆成 Working / Episodic / Semantic**（Phase 4） | 上游只有「长期记忆」一层，无法解释「什么该记住、记多久」 |
 | 向量检索 | 上游没有，Phase 4/5 新增 | 我们的 Memory Retriever + RAG 是增量能力 |
 | 记忆工具集（dream tools） | 保留思想 | 「让模型自己写记忆」比「规则抽取」更通用，但要加写入校验 |
+
+### 5.1 Phase 4 实际落地（对照上表）
+
+| 上游机制 | 实际做法 | 位置 |
+| --- | --- | --- |
+| Session / Memory 分离 | 保留：Session 仍是 JSONL，Memory 落 SQLite（同库不同表） | `src/myagent/session/manager.py:115`、`src/myagent/memory/sqlite_store.py:49` |
+| `history.jsonl` + 自增 cursor | 保留会话侧；记忆侧换成 `memories.consolidated_at IS NULL` 当增量游标 | `src/myagent/memory/sqlite_store.py:199` |
+| 摘要检查点（`last_archived`） | **未在 Phase 4 使用**：记忆只读会话历史，不改会话；留给 Phase 6 的预算裁剪 | `src/myagent/session/base.py:38` |
+| `GitStore` 版本化记忆 | 不采用：记录进 SQLite，`source` / `metadata` / `consolidated_from` 提供可审计性 | `src/myagent/memory/types.py:42`、`src/myagent/memory/consolidator.py:166` |
+| Dream 定时改写 | 改为显式的 `Consolidator`（`myagent memory consolidate`），**只有成功才前移游标** | `src/myagent/memory/consolidator.py:92` |
+| 单一 `MEMORY.md` | 拆成 Working / Episodic / Semantic 三层 + Retriever | `src/myagent/memory/manager.py:58` |
+| 向量检索（上游没有） | 新增：SQLite 存记录、Qdrant 存向量、`memory_id` 关联 | `src/myagent/memory/vector_index.py:87` |
+| 记忆工具集（dream tools） | 保留「让模型自己写」但加校验：候选过 JSON schema + 写入策略 | `src/myagent/memory/extractor.py:150`、`:184` |
 
 ## 6. 速查索引
 

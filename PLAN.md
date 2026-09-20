@@ -505,7 +505,7 @@ OpenAICompatModel   → base_url 指向 DashScope 兼容端点（LLM_BASE_URL）
       → `src/myagent/tools/base.py:220`、`src/myagent/agent/types.py:30`（`parse_error` 承载解析失败）
 * [x] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
       `LLM_MAX_TOKENS` / `LLM_CONTEXT_WINDOW` / `AGENT_MAX_ITERATIONS`，沿用 `myagent.config` 的单入口风格）
-      → `src/myagent/config/settings.py:258`（`LLMSettings`）、`:339`（`AgentSettings`）
+      → `src/myagent/config/settings.py:376`（`LLMSettings`）、`:339`（`AgentSettings`）
 * [x] `tests/test_models.py`：用假客户端验证请求形状、tool_calls 解析、错误映射（不打真实网络）
       → 382 行，覆盖请求形状、tool_calls 解析与 8 类错误映射
 
@@ -641,11 +641,11 @@ respond  生成 OutboundMessage / 直接返回文本
 ```
 
 * [x] 会话内串行：`asyncio.Lock` per session_key（跨会话天然并发）
-      → `src/myagent/agent/loop.py:247`（`_session_lock`）
+      → `src/myagent/agent/loop.py:281`（`_session_lock`）
 * [x] `run_once(user_input, session_key) -> str` 供 CLI 与测试直接调用
-      → `src/myagent/agent/loop.py:139`（`run_once`）、`:152`（`_process` 串行入口）
+      → `src/myagent/agent/loop.py:143`（`run_once`）、`:152`（`_process` 串行入口）
 * [x] `run()` 消费 `MessageBus`（Phase 2 保留最小 Bus 实现）
-      → `src/myagent/agent/loop.py:52`
+      → `src/myagent/agent/loop.py:54`
 * [x] Session 存储：JSONL + `last_archived` 字段预留（Phase 4 用），不做 workspace 命名空间迁移
       → `src/myagent/session/manager.py:58`、`:115`（落盘为 `data/sessions/cli%3Adefault.jsonl`）
 
@@ -791,7 +791,7 @@ respond  (result)              -> OutboundMessage
 ```
 
 * [x] `AgentLoop` 构造函数里不出现 `AsyncOpenAI` / `QdrantClient` / `sqlite3` 等具体类型
-      → `src/myagent/agent/loop.py:120`（只收 `BaseModel` / `ToolRegistry` / `ContextManager` /
+      → `src/myagent/agent/loop.py:122`（只收 `BaseModel` / `ToolRegistry` / `ContextManager` /
       `SessionStore` / `AgentRuntimeConfig`）；`tests/test_contracts.py:442` 用 AST 检查强行守住
 * [x] `myagent/agent/runtime.py`：`AgentRuntimeConfig`（`max_iterations` / `tool_timeout_s` /
       `max_tool_result_chars` / `context_budget_tokens`）集中管理运行参数——对齐上游把
@@ -819,13 +819,13 @@ class ContextManager(Protocol):
 ```
 
 * [x] V1（Phase 3）只做「section 拼装 + token 估算 + 超限报错」；真正的优先级裁剪与压缩在 Phase 6
-      → `src/myagent/agent/context.py:204`（section 组装）、`:246`（超限抛 `ContextBudgetExceeded`）；
+      → `src/myagent/agent/context.py:229`（section 组装）、`:246`（超限抛 `ContextBudgetExceeded`）；
       优先级常量照 PLAN 6.1 落成 `:55`～`:59`
 * [x] 保留上游的关键区分：**原始转录 ≠ 模型请求**（`docs/context.md` 第 0 节）。因此 `build()` 的输入是
   `history + memories + rag_chunks + tools`，输出才是待发送的 messages
-      → 输入是 `ContextRequest`（`src/myagent/agent/context.py:106`），输出是 `ContextBundle.messages`（`:124`）
+      → 输入是 `ContextRequest`（`src/myagent/agent/context.py:131`），输出是 `ContextBundle.messages`（`:124`）
 * [x] 预留 `CompactionReport`（本轮是否压缩、压缩掉多少 token），供 Phase 6/8 使用
-      → `src/myagent/agent/context.py:140`；`compact()` 在 `:256` 返回空报告（Phase 6 填实现）
+      → `src/myagent/agent/context.py:165`；`compact()` 在 `:256` 返回空报告（Phase 6 填实现）
 
 ## 3.4 统一接口（Protocol 而非 ABC）
 
@@ -842,11 +842,11 @@ class ContextManager(Protocol):
 
 * [x] Protocol 就近定义在各模块（或汇总到 `myagent/protocols.py`），保持「换一行 import 就能替换实现」
       → 六个契约分别在 `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、
-      `src/myagent/memory/base.py:88`、`src/myagent/rag/embedder.py:15`、
+      `src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:15`、
       `src/myagent/rag/vectorstore.py:19`、`src/myagent/rag/retriever.py:19`；
       **没有**建 `protocols.py`（理由见 ADR-0007「备选方案」）
 * [x] 装配只发生在 `myagent/runtime.py::build_agent(config)` 一处（见 3.5）
-      → `src/myagent/runtime.py:34`；`tests/test_contracts.py:446` 断言三个具体实现只在
+      → `src/myagent/runtime.py:38`；`tests/test_contracts.py:446` 断言三个具体实现只在
       `myagent.runtime` 的 import 里出现
 * [x] 决策记 **ADR-0007**：扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或继承抽象基类
       → `docs/decision-records/0007-framework-extension-points.md`
@@ -875,10 +875,10 @@ Settings（.env）
 ```
 
 * [x] 复用 Phase 0/2 的配置单入口（`src/myagent/config/settings.py`）；组件**只接收 settings 对象，不读环境变量**
-      → `Settings`（`src/myagent/config/settings.py:388`，`from_env()` 在 `:404`）；默认组件的构造
+      → `Settings`（`src/myagent/config/settings.py:506`，`from_env()` 在 `:404`）；默认组件的构造
       见 `src/myagent/runtime.py:53`（模型）、`:54`（工具）、`:57`（上下文）、`:60`（会话）、`:63`（运行参数）
 * [x] CLI 只调用 `build_agent()`，不手工 new 组件
-      → `src/myagent/cli.py:83`（chat）、`:64`（tools）；Phase 2 的 `build_agent_loop()` 已删除
+      → `src/myagent/cli.py:227`（chat）、`:64`（tools）；Phase 2 的 `build_agent_loop()` 已删除
 
 ## 阶段产出
 
@@ -950,7 +950,7 @@ tests/
 1. **可替换是可执行的事实**：`tests/test_contracts.py` 用「六个契约的结构类型断言 + 不继承任何
    东西的假件跑通链路 + AST 检查核心模块的 import」三层把这条边界固定下来——任何一次
    「核心 import 具体实现」都会立刻失败，而不是等评审发现。
-2. **装配收敛到一处**：`build_agent()`（`src/myagent/runtime.py:34`）是唯一知道实现类的地方，
+2. **装配收敛到一处**：`build_agent()`（`src/myagent/runtime.py:38`）是唯一知道实现类的地方，
    CLI 只调用它；Phase 2 记录里的遗留项「装配仍在 `cli.build_agent_loop()`」到此清账。
 3. **重构没有改变运行时语义**：真实 transcript（`docs/records/phase-3-refactor.md` §7.2）里
    「一次模型请求 → 3 个只读工具并发 → 一次回答」、第二轮复用历史得到 120，与 Phase 2 一致。
@@ -1018,21 +1018,21 @@ class MemoryRecord:
     metadata: dict[str, Any]             # paper_id、tags 等
 ```
 
-* [ ] 过长的抽取结果先拆句再入库，保证「删除/更新某一事实」可行
-* [ ] `text` 长度上限（默认 500 字符）与单次条数上限在**写入层**强制，而不是靠 prompt 自觉
+* [x] 过长的抽取结果先拆句再入库，保证「删除/更新某一事实」可行
+* [x] `text` 长度上限（默认 500 字符）与单次条数上限在**写入层**强制，而不是靠 prompt 自觉
 
 ## 4.2 Working Memory
 
 * 由 `SessionStore` 的最近 N 轮构造；N 由 `context_budget` 决定（Phase 6 接管预算）
 * 本层不落库、不 embed，只提供 `recent_turns(limit)` 视图
-* [ ] `tests/test_memory.py::test_working_memory_uses_session_history`：验证不产生额外存储
+* [x] `tests/test_memory.py::test_working_memory_uses_session_history`：验证不产生额外存储
 
 ## 4.3 Episodic Memory
 
 * 写入时机：一轮对话的 `save` 阶段之后（归档检查点，对齐上游 `agent/memory.py:996` 的 `archive_session`）
 * 记录内容：用户意图、Agent 的关键结论、工具产生的持久产物（如 `save_note`）
 * 检索：向量检索 + **时间衰减**（半衰期默认 30 天，可配）
-* [ ] `search(query, kind="episodic", top_k)`，打分 = `cosine * 0.5 ** (age_days / half_life)`
+* [x] `search(query, kind="episodic", top_k)`，打分 = `cosine * 0.5 ** (age_days / half_life)`
 
 ## 4.4 Semantic Memory
 
@@ -1076,8 +1076,8 @@ memory_vectors(                      -- 记录向量落库状态，避免重复 
   * 代价：两个 collection、配置项 +1（`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`），
     由 `QdrantSettings` 统一提供
 
-* [ ] 存储实现只接收 `SQLiteSettings` / `QdrantSettings`（`src/myagent/config/settings.py`），不直接读 env
-* [ ] SQLite 默认 `data/myagent.db`，与 Phase 5 的 documents/chunks 同库不同表
+* [x] 存储实现只接收 `SQLiteSettings` / `QdrantSettings`（`src/myagent/config/settings.py`），不直接读 env
+* [x] SQLite 默认 `data/myagent.db`，与 Phase 5 的 documents/chunks 同库不同表
 
 ## 4.6 写入策略（MemoryExtractor）
 
@@ -1100,8 +1100,8 @@ MemoryStore.add(records) → embed → Qdrant upsert → 写 memory_vectors
   只接受符合 schema 的记录，非法输出直接丢弃并记一条 warning
 * 规则兜底：命中「我是 / 我偏好 / 我的项目是」等模式的句子，直接进 Semantic（`importance=0.7`）
 * 明确**不写入**：闲聊、一次性查询、工具原始输出、含密钥或隐私的内容
-* [ ] `tests/test_memory.py::test_extractor_filters`：给 5 类句子，断言「写入哪些、丢弃哪些」
-* [ ] `tests/test_memory.py::test_dedup`：同一事实写入 3 次，SQLite 仍只有 1 条
+* [x] `tests/test_memory.py::test_extractor_filters`：给 5 类句子，断言「写入哪些、丢弃哪些」
+* [x] `tests/test_memory.py::test_dedup`：同一事实写入 3 次，SQLite 仍只有 1 条
 
 ## 4.7 检索（MemoryRetriever）
 
@@ -1114,7 +1114,7 @@ query
 ```
 
 * 接口对齐 Phase 3 的 `BaseMemory.search`；Phase 6 的 `ContextManager` 只消费 `MemoryContext`
-* [ ] 返回结果带 `memory_id`，Phase 8 才能计算「记忆命中率」
+* [x] 返回结果带 `memory_id`，Phase 8 才能计算「记忆命中率」
 
 ## 4.8 巩固（Consolidator，对应上游 Dream）
 
@@ -1158,6 +1158,34 @@ tests/test_memory.py
 `docs/memory-design.md` 必须包含：分层表（4.0）、`MemoryRecord` 字段含义、SQLite 表结构、
 Qdrant payload 与过滤、写入策略的「写/不写」清单、与上游 Dream 的对照表。
 
+结果（2026-09-20，均已落地）：
+
+| 产出 | 规模 | 内容 |
+| --- | ---: | --- |
+| `src/myagent/memory/` | 13 文件 2284 行 | 四层实现 + SQLite / Qdrant 存储 + 检索 + 抽取 + 巩固（`docs/records/phase-4-memory.md` §4） |
+| `src/myagent/agent/context.py` | +25 行 | `MemoryProvider` 端口：`recall(query, session_key)` / `observe(session_key, messages)` |
+| `src/myagent/agent/loop.py` | +36 行 | build 阶段召回、save 阶段回写；两处失败都只记 warning |
+| `src/myagent/runtime.py` | 111 行 | `build_agent(memory=...)` + `build_memory()`（对话与 CLI 共用一套配置） |
+| `src/myagent/cli.py` | +148 行 | `memory list/search/add/consolidate/forget` 五个子命令 |
+| `docs/memory-design.md` | 310 行 | 分层表 / 字段 / 表结构 / payload / 写与不写清单 / 与上游 Dream 对照 |
+| `docs/decision-records/0008-layered-memory.md` | — | collection 分裂、写入策略、衰减、巩固游标、Protocol、装配 |
+| `docs/records/phase-4-memory.md` | — | Baseline → 方案 → 实现 → 五张实验表 → 质量门 → 四个真实问题 |
+| `tests/test_memory.py` | 1586 行 / 105 项 | 全部离线（假 embedder + 内存向量库），无需 key 与 Qdrant |
+| `scripts/memory_experiment.py` | 400 行 | 五张表的实验脚本：真实组件 + Qdrant 嵌入式本地模式 |
+
+`src/myagent/` 从 39 个文件 3910 行增长到 **50 个文件 6386 行**；
+测试从 304 项增长到 442 项，覆盖率仍为 100%（2785 stmts / 662 branches）。
+
+三处与上面的文件清单不同（都是同一取舍的结果）：
+
+- 计划里的 `base.py` 只留契约：`MemoryRecord` 落到 `types.py`，
+  写路径与存储拆成 `sqlite_store.py` / `vector_index.py` / `manager.py`；
+- `FileMemoryStore` 已删除：JSONL + 字面量检索被 SQLite + Qdrant 取代，
+  `BaseMemory` 从 4 个方法长到 8 个（多了 `get` / `count` / `forget` / `add_many`）；
+- 新增 `memory/embedder.py`：PLAN 4.5 只写了「embed」，但 Phase 4 需要一条现在就能跑的
+  embedding 路径；`OpenAICompatEmbedder` 实现 `src/myagent/rag/embedder.py:15` 的 `BaseEmbedder` 契约，
+  Phase 5 的文档向量可以直接复用它。
+
 ## 验收标准
 
 **功能**（跨 Session 实验）
@@ -1169,21 +1197,38 @@ Memory OFF → 无法回答（或答非所问）
 Memory ON  → 正确召回「正在研究 RAG」（带来源与时间）
 ```
 
-* [ ] `myagent memory list` 能看到 Session 1 提炼出的 Semantic 记录
-* [ ] `MYAGENT_MEMORY_ENABLED=false` 后同一问题不再召回（开关口径与 Phase 8 一致）
+* [x] `myagent memory list` 能看到 Session 1 提炼出的 Semantic 记录
+* [x] `MYAGENT_MEMORY_ENABLED=false` 后同一问题不再召回（开关口径与 Phase 8 一致）
 
 **实验**（每组都要落进 `docs/records/phase-4-memory.md` 的表格）
 
-* [ ] 写入准确率：构造 20 句「偏好/事实/闲聊/一次性查询/工具输出」，人工标注是否该写入，
+* [x] 写入准确率：构造 20 句「偏好/事实/闲聊/一次性查询/工具输出」，人工标注是否该写入，
       报准确率与误写率
-* [ ] 去重：同一事实重复 3 轮，断言库中只有 1 条
-* [ ] 巩固：3 条 Episodic → 1 条 Semantic，检查信息是否丢失
-* [ ] 检索：10 个记忆类问题，报 hit@5 与延迟（Phase 8 复用同一套题）
+* [x] 去重：同一事实重复 3 轮，断言库中只有 1 条
+* [x] 巩固：3 条 Episodic → 1 条 Semantic，检查信息是否丢失
+* [x] 检索：10 个记忆类问题，报 hit@5 与延迟（Phase 8 复用同一套题）
 
 **工程**
 
-* [ ] `scripts/check.sh` 全绿；`tests/test_memory.py` 全部离线（假 embedder + 内存向量库）
-* [ ] Qdrant 未启动时给出可读错误而不是堆栈，`myagent memory search` 有明确提示
+* [x] `scripts/check.sh` 全绿；`tests/test_memory.py` 全部离线（假 embedder + 内存向量库）
+* [x] Qdrant 未启动时给出可读错误而不是堆栈，`myagent memory search` 有明确提示
+
+结论（证据见 `docs/records/phase-4-memory.md` §6～§8）：
+
+1. **写入是可判定的策略，不是 prompt 的自觉**：20 句人工标注上规则与 LLM 两条路径准确率都是
+   100%、误写率 0%；500 字符 / 3 条 / importance ≥ 0.5 的上限与「不写」清单全部在代码里强制
+   （`src/myagent/memory/extractor.py:184`、「写/不写」表见 `docs/memory-design.md` §4.1）；
+2. **跨 Session 召回成立**：Session 1 写入、Session 2 召回带层与日期；
+   `MYAGENT_MEMORY_ENABLED=false` 时召回为空（`docs/records/phase-4-memory.md` §6.5）；
+3. **巩固与上游 Dream 同语义**：只有写成功才前移游标（`src/myagent/memory/consolidator.py:92`），
+   3 条 Episodic 稳定折成 1 条 Semantic、逐条信息覆盖率 100%（§6.3）；
+4. **降级可读**：Qdrant 连不上时 `MemoryContext.degraded=True` + 一句含 URL 的 note，
+   `myagent memory search` 打印提示而不是堆栈（§8.2 对真实 Qdrant 的往返验证）；
+5. **实验里暴露并修掉的一个真问题**：Qdrant 把 point id 归一化成带连字符的 UUID，
+   原先会让向量命中在回查 SQLite 时全部丢失、静默退回关键词检索；
+   现在 payload 里的 `memory_id` 优先（`src/myagent/memory/vector_index.py:214`），§8.2 有往返证据。
+
+记录：`docs/records/phase-4-memory.md`
 
 ---
 
@@ -2045,7 +2090,7 @@ kyobot/
 MVP = Phase 0–8 的最小交集，每项都要有可判定的完成条件：
 
 * [x] Agent Loop + Runner（会话内串行、`max_iterations`、工具错误回灌）— Phase 2 已完成
-      （`src/myagent/agent/loop.py:247` 会话锁、`src/myagent/agent/runner.py:98` 迭代上限）
+      （`src/myagent/agent/loop.py:281` 会话锁、`src/myagent/agent/runner.py:98` 迭代上限）
 * [x] Tool Calling（schema 校验 + 并发分批 + 错误语义）— Phase 2 已完成
       （`src/myagent/tools/base.py:238` 校验、`src/myagent/agent/runner.py:220` 并发分批）
 * [ ] Session（JSONL + `last_archived` 边界 + 摘要检查点）— Phase 3 已把契约与 JSONL 实现拆开

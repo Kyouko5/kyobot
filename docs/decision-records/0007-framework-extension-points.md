@@ -26,17 +26,17 @@ PLAN 3.4 要求为六个扩展点（`BaseModel` / `BaseTool` / `BaseMemory` / `B
 1. **跨模块边界一律用 `typing.Protocol` 描述形状**，就近定义在各自模块里，不建汇总的
    `protocols.py`：
    `BaseModel`（`src/myagent/models/base.py:71`）、`BaseTool`（`src/myagent/tools/base.py:152`）、
-   `BaseMemory`（`src/myagent/memory/base.py:88`）、`BaseEmbedder`（`src/myagent/rag/embedder.py:15`）、
+   `BaseMemory`（`src/myagent/memory/base.py:30`）、`BaseEmbedder`（`src/myagent/rag/embedder.py:15`）、
    `BaseVectorStore`（`src/myagent/rag/vectorstore.py:19`）、`BaseRetriever`
    （`src/myagent/rag/retriever.py:19`）。
-   另外两个同样是 Protocol 的 Loop 边界：`ContextManager`（`src/myagent/agent/context.py:166`）
+   另外两个同样是 Protocol 的 Loop 边界：`ContextManager`（`src/myagent/agent/context.py:191`）
    与 `SessionStore`（`src/myagent/session/base.py:44`）——PLAN 只在 3.4 列了六个扩展点，
    这两个是 3.2/3.3 的产物，但决策相同，一并记在这里。
 2. **ABC 不算被禁用，而是降级为「可选的便利实现」**：`Tool(ABC)`
    （`src/myagent/tools/base.py:187`）实现 `BaseTool` 的 schema / 类型纠正 / 校验，
    内置工具继承它省代码；不继承也完全可用（`tests/test_contracts.py:70` 的 `DuckTool`
    是一个不继承任何东西的假工具，registry 与 runner 照常驱动它）。
-3. **装配收敛到一处**：`myagent.runtime.build_agent()`（`src/myagent/runtime.py:34`）
+3. **装配收敛到一处**：`myagent.runtime.build_agent()`（`src/myagent/runtime.py:38`）
    是唯一知道「哪个类实现哪个契约」的地方；核心模块只 import 契约。
 4. **契约由测试守住，而不是靠约定**：`tests/test_contracts.py` 用两个手段固定这条边界——
    每个契约一个不继承任何东西的最小实现（`tests/test_contracts.py:55` 起），

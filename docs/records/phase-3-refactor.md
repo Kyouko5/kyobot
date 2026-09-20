@@ -59,10 +59,10 @@ cli.py ──▶ runtime.py ──▶ 具体实现（OpenAICompatModel / builtin
 | --- | --- | --- |
 | 契约用 `Protocol`，不强制继承 | ADR-0007 | `src/myagent/tools/base.py:152`（`BaseTool`）+ `:187`（`Tool(ABC)` 降为便利实现） |
 | 契约就近定义，不建 `protocols.py` | ADR-0007 | `rag/`、`memory/` 各自持有契约（`src/myagent/rag/retriever.py:19`） |
-| `ContextSection` 带优先级但本阶段不裁剪 | PLAN 3.3 | 超预算抛 `ContextBudgetExceeded`（`src/myagent/agent/context.py:148`） |
-| 检索结果以 `ContextItem` 交给上下文 | `agent` 不能依赖 `memory` / `rag` | `src/myagent/agent/context.py:74` |
+| `ContextSection` 带优先级但本阶段不裁剪 | PLAN 3.3 | 超预算抛 `ContextBudgetExceeded`（`src/myagent/agent/context.py:173`） |
+| 检索结果以 `ContextItem` 交给上下文 | `agent` 不能依赖 `memory` / `rag` | `src/myagent/agent/context.py:75` |
 | 运行期上限独立成 `AgentRuntimeConfig` | PLAN 3.2 | 预算公式 `context_window - max_tokens - 1024`（`src/myagent/agent/runtime.py:73`） |
-| 超预算不落盘、模型失败仍落盘 | 请求是否真的发出去 | `src/myagent/agent/loop.py:174`、`:197` |
+| 超预算不落盘、模型失败仍落盘 | 请求是否真的发出去 | `src/myagent/agent/loop.py:186`、`:202` |
 | 新增 `tokens.py` | Phase 5/6 要用同一把尺子 | `src/myagent/tokens.py:37` |
 
 ## 5. 实现
@@ -139,7 +139,7 @@ scripts/check.sh
 三点可以直接从落盘结构读出来：
 
 1. **系统块（含 section 合并后的 system 消息）没有落盘**：第 2 行就是用户消息，
-   这正是 `transcript_start`（`src/myagent/agent/context.py:124`）的作用；
+   这正是 `transcript_start`（`src/myagent/agent/context.py:149`）的作用；
 2. **第二轮只追加本轮消息**：第 8 行紧接第 7 行，历史没有被重写；
 3. **只读工具仍然并成一批**：第 3 行一条 assistant 消息带 3 个 `tool_calls`，
    第 4～6 行是三条 `tool` 观察（`src/myagent/agent/runner.py:220`）——重构没有改变执行语义。

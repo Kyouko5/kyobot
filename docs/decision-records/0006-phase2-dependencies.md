@@ -45,7 +45,7 @@ Phase 0 结束时运行时依赖只有 `python-dotenv`。Phase 2 需要两件新
   升级时只需要改这一处并跑 `tests/test_models.py`（用假客户端覆盖了 8 类错误）。
 - 未来接入原生协议（Anthropic Messages API 之类）时，新增一个 `BaseModel` 实现即可，
   runner / loop 不需要改动；`LLM_PROVIDER` 已经是可扩展的枚举
-  （`src/myagent/config/settings.py:77`）。
+  （`src/myagent/config/settings.py:83`）。
 
 ## 备选方案
 
