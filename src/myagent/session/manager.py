@@ -1,4 +1,4 @@
-"""JSONL session storage.
+"""JSONL session storage: the Phase 3 implementation of :class:`SessionStore`.
 
 One file per session, one JSON object per line::
 
@@ -8,14 +8,14 @@ One file per session, one JSON object per line::
 Append-only, like upstream ``session/manager.py:JsonlSessionStore``: a turn only
 adds lines, so a crash can lose the tail but never corrupt earlier history.
 Compaction joins the same file later by moving ``last_archived`` (the reserved
-field) forward instead of deleting messages; Phase 4 owns that, Phase 2 only
-persists and respects it.
+field) forward instead of deleting messages; Phase 4/6 own that, this module
+only persists and respects it.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,12 +24,12 @@ from urllib.parse import quote
 from myagent.agent.types import Message
 from myagent.config.settings import AgentSettings
 from myagent.observability.logging import get_logger
+from myagent.session.base import DEFAULT_SESSION_KEY, Session
 
-__all__ = ["DEFAULT_SESSION_KEY", "Session", "SessionManager"]
+__all__ = ["DEFAULT_SESSION_KEY", "JsonlSessionStore", "Session"]
 
 logger = get_logger(__name__)
 
-DEFAULT_SESSION_KEY = "cli:default"
 _HEADER_TYPE = "session"
 _MESSAGE_TYPE = "message"
 
@@ -38,21 +38,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-@dataclass(slots=True)
-class Session:
-    """One conversation: the transcript plus where compaction last cut it."""
-
-    key: str
-    messages: list[Message] = field(default_factory=list)
-    last_archived: int = 0
-    created_at: str = ""
-
-    def transcript(self) -> list[Message]:
-        """Messages that still take part in the context (after ``last_archived``)."""
-        return list(self.messages[self.last_archived :])
-
-
-class SessionManager:
+class JsonlSessionStore:
     """Loads, caches and appends sessions stored as JSONL files."""
 
     def __init__(self, sessions_dir: Path) -> None:
@@ -60,7 +46,7 @@ class SessionManager:
         self._cache: dict[str, Session] = {}
 
     @classmethod
-    def from_settings(cls, settings: AgentSettings) -> SessionManager:
+    def from_settings(cls, settings: AgentSettings) -> JsonlSessionStore:
         """Build a manager that stores sessions where the settings point."""
         return cls(settings.sessions_dir)
 
@@ -81,7 +67,7 @@ class SessionManager:
             self._cache[key] = session
         return session
 
-    def append(self, key: str, messages: list[Message]) -> Session:
+    def append(self, key: str, messages: Sequence[Message]) -> Session:
         """Append messages to the session and to its JSONL file."""
         session = self.get_or_create(key)
         if not messages:
@@ -126,7 +112,7 @@ class SessionManager:
                 session.messages.append(Message.from_dict(record["message"]))
         return session
 
-    def _append_to_disk(self, session: Session, messages: list[Message]) -> None:
+    def _append_to_disk(self, session: Session, messages: Sequence[Message]) -> None:
         path = self.path_for(session.key)
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = []

@@ -6,11 +6,11 @@ import json
 
 from myagent.agent.types import Message, ToolCallRequest
 from myagent.config.settings import AgentSettings
-from myagent.session.manager import DEFAULT_SESSION_KEY, Session, SessionManager
+from myagent.session.manager import DEFAULT_SESSION_KEY, JsonlSessionStore, Session
 
 
-def manager(tmp_path) -> SessionManager:
-    return SessionManager(tmp_path / "sessions")
+def manager(tmp_path) -> JsonlSessionStore:
+    return JsonlSessionStore(tmp_path / "sessions")
 
 
 def test_a_new_session_starts_empty(tmp_path):
@@ -188,6 +188,6 @@ def test_known_keys_lists_stored_sessions(tmp_path):
 def test_manager_reads_the_sessions_directory_from_settings(tmp_path):
     settings = AgentSettings(sessions_dir=tmp_path / "store")
 
-    sessions = SessionManager.from_settings(settings)
+    sessions = JsonlSessionStore.from_settings(settings)
 
     assert sessions.sessions_dir == tmp_path / "store"

@@ -14,7 +14,7 @@
 | Phase 0 | 项目准备：环境、仓库、开发规范、nanobot 跑通 | ✅ 已完成 |
 | Phase 1 | nanobot 源码理解（Agent Runtime / Memory / Tool / Session） | ✅ 已完成 |
 | Phase 2 | 核心代码迁移：Model / Tool / Runner / Loop 抽象 | ✅ 已完成 |
-| Phase 3 | Agent Framework 重构：模块职责与接口 | ⬜ 未开始 |
+| Phase 3 | Agent Framework 重构：模块职责与接口 | ✅ 已完成 |
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ⬜ 未开始 |
 | Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ⬜ 未开始 |
 | Phase 6 | Context Manager 重构：优先级与预算 | ⬜ 未开始 |
@@ -44,8 +44,10 @@ myagent chat                 # 交互模式：/exit 退出、/session 看会话 
 myagent tools                # 列出已注册工具（离线可用，不需要密钥）
 ```
 
-Phase 2 之后的 Framework V1 已经可以独立运行：把只读参照 `nanobot/` 删掉，上面的命令照常工作
-（真实运行记录见 [`docs/records/phase-2-migration.md`](./docs/records/phase-2-migration.md)）。
+Phase 3 之后的 Framework V2 可以独立运行，且**模块可替换、依赖可注入**：契约用 `Protocol`
+定义、装配集中在 `myagent.runtime.build_agent()` 一处。把只读参照 `nanobot/` 删掉，上面的命令
+照常工作（真实运行记录见 [`docs/records/phase-3-refactor.md`](./docs/records/phase-3-refactor.md)，
+Phase 2 的独立运行证据在 [`docs/records/phase-2-migration.md`](./docs/records/phase-2-migration.md)）。
 对话会以 JSONL 追加写入 `data/sessions/`（已 git 忽略），工具读写的沙箱目录默认是 `workspace/`
 （其中的 `project-notes.md` 是给 `read_file` / `search_local` 用的示例语料）。
 
@@ -70,19 +72,22 @@ kyobot/
 ├── PLAN.md                     # 项目计划与验收标准（唯一路线入口）
 ├── pyproject.toml              # 打包、ruff、mypy、pytest、coverage 配置
 ├── src/myagent/                # Framework 本体
-│   ├── agent/                  # types / runner（模型↔工具循环）/ loop（4 阶段）/ context
+│   ├── runtime.py              # build_agent()：唯一装配点（Settings → 已接线的 AgentLoop）
+│   ├── agent/                  # types / runner / loop（4 阶段）/ context（section + 预算）/ runtime（运行参数）
 │   ├── models/                 # BaseModel 协议 + OpenAI 兼容实现
-│   ├── tools/                  # Tool 契约 / schema 校验 / Registry / builtin 四个工具
-│   ├── session/                # JSONL 会话存储（追加式 + last_archived 预留）
-│   ├── memory/                 # V1 记忆接口 + 文件实现（Phase 4 接线）
-│   ├── config/                 # .env 加载、类型化设置（LLM / Agent / SQLite / Qdrant）
+│   ├── tools/                  # BaseTool 协议 / schema 校验 / Registry / builtin 四个工具
+│   ├── session/                # SessionStore 契约 + JSONL 实现（追加式 + last_archived）
+│   ├── memory/                 # 记忆契约 + 文件实现（Phase 4 接线）
+│   ├── rag/                    # 检索契约与数据类型（Phase 5 实现）
+│   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding）
 │   ├── observability/          # 日志等可观测性基础件
-│   └── cli.py                  # myagent chat / myagent tools
-├── tests/                      # pytest 测试（258 项，覆盖率 100%）
+│   ├── tokens.py               # 全框架共用的 token 估算
+│   └── cli.py                  # myagent chat / myagent tools（只调用 build_agent）
+├── tests/                      # pytest 测试（304 项，覆盖率 100%）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
-│   ├── design.md               # Phase 2 设计：模块地图 / 契约 / 与上游的差异表
-│   ├── architecture.md         # 架构总览：启动路径 / 消息流 / 模块地图
+│   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
+│   ├── architecture.md         # 架构总览（上游）：启动路径 / 消息流 / 模块地图
 │   ├── agent-loop.md           # AgentLoop 与 AgentRunner 深潜
 │   ├── tool-system.md          # Tool 契约 / Registry / 发现 / 执行
 │   ├── context.md              # 上下文组装 / 预算 / 压缩
@@ -118,14 +123,16 @@ kyobot/
 - [`docs/context.md`](./docs/context.md)：system prompt 分层、预算公式、四步拟合、摘要压缩与空闲压缩。
 - [`docs/memory.md`](./docs/memory.md)：Session 与 Memory 的边界、history.jsonl、摘要检查点、Dream 整合。
 
-**Framework 设计与实现（Phase 2 产出）**
+**Framework 设计与实现（Phase 2 / Phase 3 产出）**
 
-- [`docs/design.md`](./docs/design.md)：Framework V1 的模块地图、一次请求经过哪些代码、模块契约，以及与上游的「保留 / 简化 / 加法」差异表。
+- [`docs/design.md`](./docs/design.md)：Framework V2 的模块地图、八个契约的签名、装配图、与上游的「保留 / 简化 / 加法」差异表，以及「为什么 Loop 不负责 RAG」等四个答辩问题。
 - [`docs/decision-records/0006-phase2-dependencies.md`](./docs/decision-records/0006-phase2-dependencies.md)：为什么引入 `openai`、为什么 CLI 用 `argparse`，以及备选方案。
+- [`docs/decision-records/0007-framework-extension-points.md`](./docs/decision-records/0007-framework-extension-points.md)：为什么扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或抽象基类。
 - [`docs/records/phase-2-migration.md`](./docs/records/phase-2-migration.md)：Phase 2 工作记录（含「删掉 nanobot 后」的真实 transcript 与落盘结构）。
+- [`docs/records/phase-3-refactor.md`](./docs/records/phase-3-refactor.md)：Phase 3 工作记录（契约边界的验证方式、真实 transcript、质量门）。
 
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 494 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 691 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 

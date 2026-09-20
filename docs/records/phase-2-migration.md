@@ -45,13 +45,13 @@ agent 不 import models；runner 不 import openai        （理由见 docs/desi
 
 | 决策 | 来源 | 结果 |
 | --- | --- | --- |
-| Loop / Runner 分离 | `docs/agent-loop.md` §3「保留」 | `src/myagent/agent/loop.py:106` / `src/myagent/agent/runner.py:87` |
+| Loop / Runner 分离 | `docs/agent-loop.md` §3「保留」 | `src/myagent/agent/loop.py:117` / `src/myagent/agent/runner.py:87` |
 | 7 阶段简化为 4 阶段 | `docs/agent-loop.md` §3「阶段先简化」 | `restore`/`compact` 并入 `build`，命令交给 CLI |
-| 工具失败不抛异常，回灌成观察 | `docs/tool-system.md` §5 | `src/myagent/tools/registry.py:149` 统一追加 retry hint |
+| 工具失败不抛异常，回灌成观察 | `docs/tool-system.md` §5 | `src/myagent/tools/registry.py:153` 统一追加 retry hint |
 | 只读工具并发分批 | `docs/tool-system.md` §5 | `src/myagent/agent/runner.py:220` |
-| 会话 JSONL 追加式 + `last_archived` 预留 | `docs/memory.md` §5 | `src/myagent/session/manager.py:55` |
-| Context 只做「原料」不做预算 | `docs/context.md` §4 | `src/myagent/agent/context.py:47`（Phase 6 重写） |
-| Memory 先立接口不接线 | `docs/memory.md` §5 | `src/myagent/memory/base.py:51`（Phase 4 接线） |
+| 会话 JSONL 追加式 + `last_archived` 预留 | `docs/memory.md` §5 | `src/myagent/session/manager.py:115`（Phase 3 后由 `src/myagent/session/base.py:44` 的契约描述） |
+| Context 只做「原料」不做预算 | `docs/context.md` §4 | `src/myagent/agent/context.py:89`（Phase 3 已改为 section + 预算检查，裁剪留给 Phase 6） |
+| Memory 先立接口不接线 | `docs/memory.md` §5 | `src/myagent/memory/base.py:88`（Phase 4 接线） |
 
 ### 4.3 新增依赖
 
@@ -59,6 +59,10 @@ agent 不 import models；runner 不 import openai        （理由见 docs/desi
 理由与备选方案见 `docs/decision-records/0006-phase2-dependencies.md`。
 
 ## 5. 实现
+
+> 下表是本阶段结束时的**快照**。Phase 3 重写/拆分了其中几个文件
+> （`agent/context.py` 重写、`session/manager.py` 改名并拆出契约、`cli.py` 去掉装配），
+> 现状见 `docs/records/phase-3-refactor.md` §5。
 
 | 文件 | 行数 | 职责 |
 | --- | ---: | --- |
@@ -215,7 +219,7 @@ Phase 0 基线是 248 stmts / 63 项测试、100% 覆盖率；本阶段把语句
 修复：
 
 - `ContextBundle.transcript_start` 的语义改成「本轮新增消息的起点」
-  （`src/myagent/agent/context.py:34`、`:67`），历史越长它越大；
+  （`src/myagent/agent/context.py:124`、`:251`），历史越长它越大；
 - 新增回归测试 `tests/test_loop.py::test_a_second_turn_does_not_store_the_history_twice`，
   同时断言内存与「重新从磁盘加载」两条路径。
 

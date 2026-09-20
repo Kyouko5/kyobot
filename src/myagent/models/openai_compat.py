@@ -72,6 +72,11 @@ class OpenAICompatModel:
         self._client = client
 
     @property
+    def settings(self) -> LLMSettings:
+        """The settings this model was built from (read-only, for inspection)."""
+        return self._settings
+
+    @property
     def client(self) -> AsyncOpenAI:
         """The underlying SDK client, created on first use."""
         if self._client is None:

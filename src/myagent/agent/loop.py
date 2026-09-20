@@ -10,6 +10,11 @@ turn is attributable without a debugger.
 Responsibilities are deliberately the same as upstream's: the loop owns *who*,
 *which context* and *where the result goes*; the runner owns *how many times the
 model and the tools talk*.
+
+Phase 3 makes the four stages depend on contracts instead of implementations:
+the loop holds a :class:`ContextManager`, a :class:`SessionStore`, a
+:class:`BaseModel` and a :class:`ToolRegistry`, and ``myagent/runtime.py`` is the
+only place that knows which classes those are.
 """
 
 from __future__ import annotations
@@ -20,13 +25,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from myagent.agent.context import ContextBuilder, ContextBundle
+from myagent.agent.context import (
+    ContextBudgetExceeded,
+    ContextBundle,
+    ContextManager,
+    ContextRequest,
+)
 from myagent.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
+from myagent.agent.runtime import AgentRuntimeConfig
 from myagent.agent.types import InboundMessage, Message, OutboundMessage, StopReason
-from myagent.config.settings import AgentSettings
 from myagent.models.base import BaseModel
 from myagent.observability.logging import get_logger
-from myagent.session.manager import DEFAULT_SESSION_KEY, SessionManager
+from myagent.session.base import DEFAULT_SESSION_KEY, SessionStore
 from myagent.tools.registry import ToolRegistry
 
 __all__ = ["AgentLoop", "MessageBus", "TurnContext"]
@@ -83,6 +93,7 @@ class TurnContext:
     bundle: ContextBundle | None = None
     result: AgentRunResult | None = None
     outbound: OutboundMessage | None = None
+    error: str | None = None
 
     def require_bundle(self) -> ContextBundle:
         """Return the built context, or fail loudly when the stage order broke."""
@@ -104,23 +115,23 @@ class TurnContext:
 
 
 class AgentLoop:
-    """Ties the model, the tools, the context builder and the session store together."""
+    """Ties the model, the tools, the context manager and the session store together."""
 
     def __init__(
         self,
         *,
         model: BaseModel,
         tools: ToolRegistry,
-        context: ContextBuilder,
-        sessions: SessionManager,
-        settings: AgentSettings,
+        context: ContextManager,
+        sessions: SessionStore,
+        runtime: AgentRuntimeConfig,
         bus: MessageBus | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
         self.context = context
         self.sessions = sessions
-        self.settings = settings
+        self.runtime = runtime
         self.bus = bus if bus is not None else MessageBus()
         self.runner = AgentRunner()
         self._locks: dict[str, asyncio.Lock] = {}
@@ -151,19 +162,35 @@ class AgentLoop:
     async def _build_turn(self, ctx: TurnContext) -> None:
         """Load the session and assemble the request messages."""
         session = self.sessions.get_or_create(ctx.session_key)
-        ctx.bundle = self.context.build(history=session.transcript(), user_input=ctx.user_input)
+        request = ContextRequest(
+            user_input=ctx.user_input,
+            history=session.transcript(),
+            tools=self.tools.get_definitions(),
+            session_key=ctx.session_key,
+            budget_tokens=self.runtime.context_budget_tokens,
+        )
+        try:
+            ctx.bundle = self.context.build(request)
+        except ContextBudgetExceeded as exc:
+            # Phase 3 reports an over-budget request instead of trimming it.
+            # Aborting build (rather than raising out of the loop) keeps the
+            # turn ending in the respond stage, like any other failed turn.
+            logger.warning("[turn %s] build stage aborted: %s", ctx.turn_id, exc)
+            ctx.error = str(exc)
 
     async def _run_turn(self, ctx: TurnContext) -> None:
         """Hand the messages to the runner."""
+        if ctx.error is not None:
+            return
         bundle = ctx.require_bundle()
         ctx.result = await self.runner.run(
             AgentRunSpec(
                 messages=list(bundle.messages),
                 tools=self.tools,
                 model=self.model,
-                max_iterations=self.settings.max_iterations,
-                max_tool_result_chars=self.settings.max_tool_result_chars,
-                tool_timeout_s=self.settings.tool_timeout_s,
+                max_iterations=self.runtime.max_iterations,
+                max_tool_result_chars=self.runtime.max_tool_result_chars,
+                tool_timeout_s=self.runtime.tool_timeout_s,
             )
         )
 
@@ -172,7 +199,14 @@ class AgentLoop:
 
         Never the system prompt (rebuilt every turn) and never the replayed
         history (already on disk), which is what ``transcript_start`` marks.
+
+        A turn that never reached the model is not saved: the request was never
+        sent, so there is nothing to replay. (A *model* failure behaves
+        differently on purpose — the message did reach the provider, so the
+        user message stays in the transcript; see ``docs/design.md`` §3.7.)
         """
+        if ctx.error is not None:
+            return
         bundle = ctx.require_bundle()
         result = ctx.require_result()
         produced: list[Message] = [
@@ -183,6 +217,14 @@ class AgentLoop:
 
     async def _prepare_outbound(self, ctx: TurnContext) -> None:
         """Turn the run result into the text the channel receives."""
+        if ctx.error is not None:
+            ctx.outbound = OutboundMessage(
+                session_key=ctx.session_key,
+                content=f"The request was not sent: {ctx.error}",
+                stop_reason=StopReason.ERROR,
+                tools_used=(),
+            )
+            return
         result = ctx.require_result()
         if result.stop_reason is StopReason.ERROR:
             logger.warning("turn %s failed: %s", ctx.turn_id, result.error)

@@ -4,6 +4,10 @@ Mirrors upstream ``agent/tools/registry.py``: ``prepare_call`` never raises and
 returns a readable error string instead, ``get_definitions`` sorts by name for a
 cache-stable tool block, and ``execute`` appends the "try a different approach"
 hint so a failing tool teaches the model instead of killing the turn.
+
+It stores :class:`BaseTool` (a Protocol), not :class:`Tool` (the ABC): any
+object with the right shape can be registered, which is what makes "adding a
+tool needs only ``registry.register(...)``" true (PLAN 3.4).
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from myagent.tools.base import Tool, ToolResult
+from myagent.tools.base import BaseTool, ToolResult
 
 __all__ = ["RETRY_HINT", "ToolRegistry"]
 
@@ -23,10 +27,10 @@ class ToolRegistry:
     """Holds the registered tools and is the only entry point for calling them."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, Tool] = {}
+        self._tools: dict[str, BaseTool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
 
-    def register(self, tool: Tool) -> None:
+    def register(self, tool: BaseTool) -> None:
         """Register (or replace) a tool by name."""
         self._tools[tool.name] = tool
         self._cached_definitions = None
@@ -36,7 +40,7 @@ class ToolRegistry:
         if self._tools.pop(name, None) is not None:
             self._cached_definitions = None
 
-    def get(self, name: str) -> Tool | None:
+    def get(self, name: str) -> BaseTool | None:
         """Return a tool by exact name."""
         return self._tools.get(name)
 
@@ -59,7 +63,7 @@ class ToolRegistry:
 
     def prepare_call(
         self, name: str, params: Any
-    ) -> tuple[Tool | None, dict[str, Any], str | None]:
+    ) -> tuple[BaseTool | None, dict[str, Any], str | None]:
         """Resolve a call: find the tool, coerce and validate the arguments.
 
         Returns ``(tool, params, error)``. Nothing here raises: an unknown name,

@@ -27,6 +27,7 @@ from myagent.config.settings import (
     EmbeddingSettings,
     LLMSettings,
     QdrantSettings,
+    Settings,
     SQLiteSettings,
 )
 
@@ -49,6 +50,7 @@ __all__ = [
     "MissingEnvError",
     "QdrantSettings",
     "SQLiteSettings",
+    "Settings",
     "discover_env_file",
     "get_bool_env",
     "get_env",

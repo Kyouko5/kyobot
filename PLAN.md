@@ -502,7 +502,7 @@ OpenAICompatModel   → base_url 指向 DashScope 兼容端点（LLM_BASE_URL）
 * [x] Message Format（user / assistant(tool_calls) / tool 三种角色，含 tool_call_id）
       → `src/myagent/agent/types.py:100`（`Message`，带 `to_dict` / `from_dict`）
 * [x] Tool Calling（`Tool.to_schema()` → OpenAI function，参数解析失败要能被上层看见）
-      → `src/myagent/tools/base.py:175`、`src/myagent/agent/types.py:30`（`parse_error` 承载解析失败）
+      → `src/myagent/tools/base.py:220`、`src/myagent/agent/types.py:30`（`parse_error` 承载解析失败）
 * [x] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
       `LLM_MAX_TOKENS` / `LLM_CONTEXT_WINDOW` / `AGENT_MAX_ITERATIONS`，沿用 `myagent.config` 的单入口风格）
       → `src/myagent/config/settings.py:258`（`LLMSettings`）、`:339`（`AgentSettings`）
@@ -554,7 +554,7 @@ search_local   受控的本地检索桩（Phase 7 替换为真实论文检索）
 * [x] 4 个工具可被模型正确调用，参数错误时返回可读提示而不是抛异常
       → `src/myagent/tools/builtin/__init__.py:30`（显式注册 4 个工具）
 * [x] `tests/test_tools.py`：类型纠正（`"3"` → `3`）、schema 校验错误文案、名字纠错、并发分批、错误语义
-      → 515 行；校验在 `src/myagent/tools/base.py:193`，纠错在 `src/myagent/tools/registry.py:60`
+      → 515 行；校验在 `src/myagent/tools/base.py:238`，纠错在 `src/myagent/tools/registry.py:64`
 
 ## 2.4 Agent Runner（agent/runner.py）
 
@@ -605,7 +605,7 @@ class AgentRunResult:
       → `src/myagent/agent/runner.py:90`、`:130`
 * [x] Tool timeout（单工具超时 + 超时转成可读工具错误）→ `src/myagent/agent/runner.py:181`
 * [x] Tool error handling（工具异常/ToolResult.error → 提示文本回灌，不中断本轮）
-      → `src/myagent/tools/registry.py:149`（统一追加 retry hint）
+      → `src/myagent/tools/registry.py:153`（统一追加 retry hint）
 * [x] Tool result 截断（`max_tool_result_chars`）→ `src/myagent/agent/runner.py:213`
 * [x] termination condition（`stop_reason` 四个取值 + 空回复重试上限 2）
       → `src/myagent/agent/types.py:90`、`src/myagent/agent/runner.py:31`
@@ -641,13 +641,13 @@ respond  生成 OutboundMessage / 直接返回文本
 ```
 
 * [x] 会话内串行：`asyncio.Lock` per session_key（跨会话天然并发）
-      → `src/myagent/agent/loop.py:205`（`_session_lock`）
+      → `src/myagent/agent/loop.py:247`（`_session_lock`）
 * [x] `run_once(user_input, session_key) -> str` 供 CLI 与测试直接调用
-      → `src/myagent/agent/loop.py:128`（`run_once`）、`:141`（`_process` 串行入口）
+      → `src/myagent/agent/loop.py:139`（`run_once`）、`:152`（`_process` 串行入口）
 * [x] `run()` 消费 `MessageBus`（Phase 2 保留最小 Bus 实现）
-      → `src/myagent/agent/loop.py:42`
+      → `src/myagent/agent/loop.py:52`
 * [x] Session 存储：JSONL + `last_archived` 字段预留（Phase 4 用），不做 workspace 命名空间迁移
-      → `src/myagent/session/manager.py:55`、`:129`（落盘为 `data/sessions/cli%3Adefault.jsonl`）
+      → `src/myagent/session/manager.py:58`、`:115`（落盘为 `data/sessions/cli%3Adefault.jsonl`）
 
 ## 2.6 CLI
 
@@ -687,9 +687,9 @@ Response
 | 产出 | 规模 | 内容 |
 | --- | ---: | --- |
 | `src/myagent/`（Framework 本体） | 30 个源文件 3112 行 | `agent/`（types · runner · loop · context）、`models/`、`tools/` + 4 个内置工具、`session/`、`memory/`（未接线）、`cli.py` + `__main__.py` |
-| `docs/design.md` | 407 行 | 模块地图、一次请求的代码路径、模块契约、与上游的差异表（保留 / 简化 / 加法）、本阶段不做的事 |
+| `docs/design.md` | 407 行 | 模块地图、一次请求的代码路径、模块契约、与上游的差异表（保留 / 简化 / 加法）、本阶段不做的事（Phase 3 已重写为 800 行的 V2 设计，见下） |
 | `docs/decision-records/0006-phase2-dependencies.md` | 57 行 | `openai>=1.50` 与标准库 `argparse` 的取舍、备选方案与后果 |
-| `docs/records/phase-2-migration.md` | 258 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 过程中修掉的两个真实 bug |
+| `docs/records/phase-2-migration.md` | 262 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 过程中修掉的两个真实 bug |
 | `tests/` | 15 个文件 2952 行 | 258 项测试（Phase 1 基线 63 项），覆盖率 100%（1499 stmts / 398 branches） |
 
 命令行入口由 `pyproject.toml` 的 `[project.scripts]` 暴露：
@@ -720,7 +720,7 @@ kyobot（src/myagent）
 2. **质量门**：`scripts/check.sh` 全绿——46 个文件已格式化、mypy strict 覆盖 30 个源文件 0 问题、
    258 项测试（1499 stmts / 398 branches，100% 覆盖），覆盖率不低于 Phase 1 基线（63 项测试、248 stmts）。
 3. **取舍可讲**：`docs/design.md` §4 把每一处差异归入「保留 / 简化 / 加法」，§5 列出本阶段不做的事
-   作为 Phase 3 的输入；过程中发现并修掉的两个真实问题（会话重复落盘、测试泄漏真实 `.env`）
+   作为 Phase 3 的输入（Phase 3 后 §5 更名为「尚未实现（Phase 4+ 的输入）」）；过程中发现并修掉的两个真实问题（会话重复落盘、测试泄漏真实 `.env`）
    连同修复与回归测试记在记录 §8。
 
 记录：`docs/records/phase-2-migration.md`
@@ -790,11 +790,17 @@ save     (session, result)     -> None                # 交给 SessionStore
 respond  (result)              -> OutboundMessage
 ```
 
-* [ ] `AgentLoop` 构造函数里不出现 `AsyncOpenAI` / `QdrantClient` / `sqlite3` 等具体类型
-* [ ] `myagent/agent/runtime.py`：`AgentRuntimeConfig`（`max_iterations` / `tool_timeout_s` /
+* [x] `AgentLoop` 构造函数里不出现 `AsyncOpenAI` / `QdrantClient` / `sqlite3` 等具体类型
+      → `src/myagent/agent/loop.py:120`（只收 `BaseModel` / `ToolRegistry` / `ContextManager` /
+      `SessionStore` / `AgentRuntimeConfig`）；`tests/test_contracts.py:442` 用 AST 检查强行守住
+* [x] `myagent/agent/runtime.py`：`AgentRuntimeConfig`（`max_iterations` / `tool_timeout_s` /
       `max_tool_result_chars` / `context_budget_tokens`）集中管理运行参数——对齐上游把
       `max_tool_iterations`、`max_tool_result_chars` 放在配置层（`config/schema.py:129`）
-* [ ] 单测：注入假 model + 假 tools + 假 context，验证 4 个阶段的调用顺序与失败传播
+      → `src/myagent/agent/runtime.py:33`；预算公式在 `:73`（`context_window - max_tokens - 1024`）
+* [x] 单测：注入假 model + 假 tools + 假 context，验证 4 个阶段的调用顺序与失败传播
+      → `tests/test_contracts.py:341`（四个假件跑通整条链路）、`tests/test_loop.py:245`
+      （超预算在 build 阶段失败且不调用模型）、`tests/test_loop.py:258`（build 把 ContextRequest
+      原样交给 ContextManager）
 
 ## 3.3 ContextManager：从「拼字符串」到「可裁剪的 section」
 
@@ -812,10 +818,14 @@ class ContextManager(Protocol):
     def compact(self, session: Session) -> CompactionReport: ...
 ```
 
-* V1（Phase 3）只做「section 拼装 + token 估算 + 超限报错」；真正的优先级裁剪与压缩在 Phase 6
-* 保留上游的关键区分：**原始转录 ≠ 模型请求**（`docs/context.md` 第 0 节）。因此 `build()` 的输入是
+* [x] V1（Phase 3）只做「section 拼装 + token 估算 + 超限报错」；真正的优先级裁剪与压缩在 Phase 6
+      → `src/myagent/agent/context.py:204`（section 组装）、`:246`（超限抛 `ContextBudgetExceeded`）；
+      优先级常量照 PLAN 6.1 落成 `:55`～`:59`
+* [x] 保留上游的关键区分：**原始转录 ≠ 模型请求**（`docs/context.md` 第 0 节）。因此 `build()` 的输入是
   `history + memories + rag_chunks + tools`，输出才是待发送的 messages
-* 预留 `CompactionReport`（本轮是否压缩、压缩掉多少 token），供 Phase 6/8 使用
+      → 输入是 `ContextRequest`（`src/myagent/agent/context.py:106`），输出是 `ContextBundle.messages`（`:124`）
+* [x] 预留 `CompactionReport`（本轮是否压缩、压缩掉多少 token），供 Phase 6/8 使用
+      → `src/myagent/agent/context.py:140`；`compact()` 在 `:256` 返回空报告（Phase 6 填实现）
 
 ## 3.4 统一接口（Protocol 而非 ABC）
 
@@ -830,11 +840,20 @@ class ContextManager(Protocol):
 | `BaseVectorStore` | `rag/vectorstore.py` | `upsert(...)` / `search(vector, top_k, filters)` | `QdrantVectorStore`（Phase 5） |
 | `BaseRetriever` | `rag/retriever.py` | `retrieve(query, top_k, filters) -> list[RetrievedChunk]` | `VectorRetriever`（Phase 5） |
 
-* [ ] Protocol 就近定义在各模块（或汇总到 `myagent/protocols.py`），保持「换一行 import 就能替换实现」
-* [ ] 装配只发生在 `myagent/runtime.py::build_agent(config)` 一处（见 3.5）
-* [ ] 决策记 **ADR-0007**：扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或继承抽象基类
-* [ ] `tests/test_contracts.py`：给每个 Protocol 写一个最小假实现，验证 `AgentRunner` 在不 import
+* [x] Protocol 就近定义在各模块（或汇总到 `myagent/protocols.py`），保持「换一行 import 就能替换实现」
+      → 六个契约分别在 `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、
+      `src/myagent/memory/base.py:88`、`src/myagent/rag/embedder.py:15`、
+      `src/myagent/rag/vectorstore.py:19`、`src/myagent/rag/retriever.py:19`；
+      **没有**建 `protocols.py`（理由见 ADR-0007「备选方案」）
+* [x] 装配只发生在 `myagent/runtime.py::build_agent(config)` 一处（见 3.5）
+      → `src/myagent/runtime.py:34`；`tests/test_contracts.py:446` 断言三个具体实现只在
+      `myagent.runtime` 的 import 里出现
+* [x] 决策记 **ADR-0007**：扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或继承抽象基类
+      → `docs/decision-records/0007-framework-extension-points.md`
+* [x] `tests/test_contracts.py`：给每个 Protocol 写一个最小假实现，验证 `AgentRunner` 在不 import
       具体实现的前提下即可工作
+      → `tests/test_contracts.py:252`（六个契约都是结构类型）、`:305`（假工具 + 假模型驱动 runner）、
+      `:341`（四个假件跑通 loop）；`ContextManager` / `SessionStore` 两个 Loop 契约在 `:261`
 
 ## 3.5 装配与配置
 
@@ -855,8 +874,11 @@ Settings（.env）
                     ContextManager + ToolRegistry + AgentLoop
 ```
 
-* 复用 Phase 0/2 的配置单入口（`src/myagent/config/settings.py`）；组件**只接收 settings 对象，不读环境变量**
-* CLI 只调用 `build_agent()`，不手工 new 组件
+* [x] 复用 Phase 0/2 的配置单入口（`src/myagent/config/settings.py`）；组件**只接收 settings 对象，不读环境变量**
+      → `Settings`（`src/myagent/config/settings.py:388`，`from_env()` 在 `:404`）；默认组件的构造
+      见 `src/myagent/runtime.py:53`（模型）、`:54`（工具）、`:57`（上下文）、`:60`（会话）、`:63`（运行参数）
+* [x] CLI 只调用 `build_agent()`，不手工 new 组件
+      → `src/myagent/cli.py:83`（chat）、`:64`（tools）；Phase 2 的 `build_agent_loop()` 已删除
 
 ## 阶段产出
 
@@ -880,14 +902,38 @@ tests/
 `docs/design.md` 必须包含：模块职责表（3.1）、六个接口签名（3.4）、装配图（3.5），
 以及「与上游 nanobot 的差异表」——每条差异都要给出理由与上游锚点。
 
+结果（2026-09-20，均已落地）：
+
+| 产出 | 规模 | 内容 |
+| --- | ---: | --- |
+| `src/myagent/runtime.py` | 65 行 | 唯一装配点 `build_agent`：6 个 kwarg 各自覆盖一个组件 |
+| `src/myagent/agent/runtime.py` | 78 行 | `AgentRuntimeConfig`（迭代上限 / 工具超时 / 截断 / 上下文预算） |
+| `src/myagent/agent/context.py` | 295 行 | section 模型 + token 估算 + 超预算报错 + 空 `compact()` |
+| `src/myagent/session/` | 2 文件 210 行 | `base.py` 契约（`Session` / `SessionStore`）+ `manager.py` JSONL 实现 |
+| `src/myagent/rag/` | 5 文件 173 行 | 数据模型 + `BaseEmbedder` / `BaseVectorStore` / `BaseRetriever` |
+| `src/myagent/tokens.py` | 49 行 | 全框架共用的 `estimate_tokens` |
+| `src/myagent/agent/loop.py` | 263 行 | 4 阶段改为契约注入；`TurnContext.error`；超预算不发请求 |
+| `docs/design.md` | 800 行 | V2 设计：职责表 / 八个契约签名 / 装配图 / 差异表 / 四个答辩问题 |
+| `docs/decision-records/0007-framework-extension-points.md` | 87 行 | Protocol + 装配注入的决策、后果与 6 个备选方案 |
+| `docs/records/phase-3-refactor.md` | 241 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 修掉的两个真实问题 |
+| `tests/test_contracts.py` + `tests/test_runtime.py` | 2 文件 552 行 | 契约 / 边界 / 装配的测试（含 AST import 检查） |
+
+`src/myagent/` 从 30 个文件 3112 行增长到 **39 个文件 3910 行**。
+
+两处与上面的文件清单不同（都是同一取舍的结果）：
+
+- 计划里的 `agent/session.py` 落成 `session/base.py`（契约）+ `session/manager.py`（JSONL 实现）——
+  会话不属于「一轮对话的编排」；
+- `protocols.py` 没有创建：契约就近定义在各模块，取舍记在 ADR-0007 的「备选方案」。
+
 ## 验收标准
 
 **能力判定**
 
-* [ ] 换模型（DashScope → 本地 OpenAI 兼容端点）只改 `.env`，不改业务代码
-* [ ] 新增一个工具只需 `registry.register(...)`，`AgentRunner` / `AgentLoop` 零改动
-* [ ] `AgentRunner` 的 import 里不出现 `openai` / `qdrant_client`
-* [ ] `scripts/check.sh` 全绿，`tests/test_contracts.py` 覆盖六个 Protocol
+* [x] 换模型（DashScope → 本地 OpenAI 兼容端点）只改 `.env`，不改业务代码
+* [x] 新增一个工具只需 `registry.register(...)`，`AgentRunner` / `AgentLoop` 零改动
+* [x] `AgentRunner` 的 import 里不出现 `openai` / `qdrant_client`
+* [x] `scripts/check.sh` 全绿，`tests/test_contracts.py` 覆盖六个 Protocol
 
 **答辩判定**（答案写进 `docs/design.md`，每条都要指向上游锚点或本仓库代码）
 
@@ -898,6 +944,20 @@ tests/
 > 为什么 Tool 需要 Registry，而不是一个 dict + 分支？
 
 > 为什么用 Protocol 而不是 ABC？
+
+结论（证据见 `docs/records/phase-3-refactor.md` §7）：
+
+1. **可替换是可执行的事实**：`tests/test_contracts.py` 用「六个契约的结构类型断言 + 不继承任何
+   东西的假件跑通链路 + AST 检查核心模块的 import」三层把这条边界固定下来——任何一次
+   「核心 import 具体实现」都会立刻失败，而不是等评审发现。
+2. **装配收敛到一处**：`build_agent()`（`src/myagent/runtime.py:34`）是唯一知道实现类的地方，
+   CLI 只调用它；Phase 2 记录里的遗留项「装配仍在 `cli.build_agent_loop()`」到此清账。
+3. **重构没有改变运行时语义**：真实 transcript（`docs/records/phase-3-refactor.md` §7.2）里
+   「一次模型请求 → 3 个只读工具并发 → 一次回答」、第二轮复用历史得到 120，与 Phase 2 一致。
+4. **质量门**：`scripts/check.sh` 全绿——58 个文件已格式化、mypy strict 覆盖 39 个源文件 0 问题、
+   304 项测试（1761 stmts / 434 branches，100% 覆盖），文档锚点 691 个全部解析。
+5. **答辩问题**：四个问题（为什么 Loop 不负责 RAG / 为什么 Memory 与 RAG 分开 /
+   为什么需要 Registry / 为什么用 Protocol）连上游锚点一起写进 `docs/design.md` §6。
 
 记录：`docs/records/phase-3-refactor.md`
 
@@ -1985,10 +2045,11 @@ kyobot/
 MVP = Phase 0–8 的最小交集，每项都要有可判定的完成条件：
 
 * [x] Agent Loop + Runner（会话内串行、`max_iterations`、工具错误回灌）— Phase 2 已完成
-      （`src/myagent/agent/loop.py:205` 会话锁、`src/myagent/agent/runner.py:98` 迭代上限）
+      （`src/myagent/agent/loop.py:247` 会话锁、`src/myagent/agent/runner.py:98` 迭代上限）
 * [x] Tool Calling（schema 校验 + 并发分批 + 错误语义）— Phase 2 已完成
-      （`src/myagent/tools/base.py:193` 校验、`src/myagent/agent/runner.py:220` 并发分批）
-* [ ] Session（JSONL + `last_archived` 边界 + 摘要检查点）
+      （`src/myagent/tools/base.py:238` 校验、`src/myagent/agent/runner.py:220` 并发分批）
+* [ ] Session（JSONL + `last_archived` 边界 + 摘要检查点）— Phase 3 已把契约与 JSONL 实现拆开
+      （`src/myagent/session/base.py:44`），摘要检查点留给 Phase 4/6
 * [ ] Memory（Episodic/Semantic 分开、写入过滤、向量召回）
 * [ ] Vector Retrieval（Qdrant + DashScope embedding，按文档过滤）
 * [ ] RAG（PDF → chunk → embedding → 带引用回答）

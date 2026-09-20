@@ -8,12 +8,13 @@ from pathlib import Path
 import pytest
 
 from fakes import ProbeTool, ScriptedModel, call, tool_response
-from myagent.agent.context import ContextBuilder
+from myagent.agent.context import ContextManager, SectionedContextManager
 from myagent.agent.loop import AgentLoop, MessageBus, TurnContext
+from myagent.agent.runtime import AgentRuntimeConfig
 from myagent.agent.types import InboundMessage, StopReason
 from myagent.config.settings import AgentSettings
 from myagent.models.base import LLMError, LLMResponse
-from myagent.session.manager import SessionManager
+from myagent.session.manager import JsonlSessionStore
 from myagent.tools.registry import ToolRegistry
 
 
@@ -23,19 +24,21 @@ def build_loop(
     *,
     bus: MessageBus | None = None,
     tools: ToolRegistry | None = None,
-    **settings_overrides: object,
+    context: ContextManager | None = None,
+    runtime: AgentRuntimeConfig | None = None,
+    **runtime_overrides: object,
 ) -> AgentLoop:
     settings = AgentSettings(
         workspace=tmp_path,
         sessions_dir=tmp_path / "sessions",
-        **settings_overrides,  # type: ignore[arg-type]
     )
+    resolved_runtime = runtime if runtime is not None else AgentRuntimeConfig(**runtime_overrides)  # type: ignore[arg-type]
     return AgentLoop(
         model=model,
         tools=tools if tools is not None else ToolRegistry(),
-        context=ContextBuilder(settings.workspace),
-        sessions=SessionManager.from_settings(settings),
-        settings=settings,
+        context=context if context is not None else SectionedContextManager(settings.workspace),
+        sessions=JsonlSessionStore.from_settings(settings),
+        runtime=resolved_runtime,
         bus=bus,
     )
 
@@ -96,7 +99,7 @@ async def test_a_second_turn_does_not_store_the_history_twice(tmp_path):
     stored = [message.content for message in loop.sessions.get_or_create("cli:test").messages]
     reloaded = [
         message.content
-        for message in SessionManager(tmp_path / "sessions").get_or_create("cli:test").messages
+        for message in JsonlSessionStore(tmp_path / "sessions").get_or_create("cli:test").messages
     ]
 
     assert stored == ["hello", "first", "again", "second"]
@@ -237,3 +240,43 @@ def test_stage_order_violations_are_explicit():
         ctx.require_result()
     with pytest.raises(RuntimeError, match="response was not prepared"):
         ctx.require_outbound()
+
+
+async def test_an_over_budget_request_fails_without_calling_the_model(tmp_path):
+    model = ScriptedModel(LLMResponse(content="should not be reached"))
+    loop = build_loop(model, tmp_path, context_budget_tokens=1)
+
+    answer = await loop.run_once("hello", "cli:test")
+
+    assert answer.startswith("The request was not sent: estimated ")
+    assert "for 1 available" in answer
+    assert model.requests == []
+    # The request never left the process, so there is nothing to replay.
+    assert loop.sessions.get_or_create("cli:test").messages == []
+
+
+async def test_the_build_stage_hands_everything_to_the_context_manager(tmp_path):
+    seen: list[object] = []
+
+    class RecordingContext(SectionedContextManager):
+        def build(self, request):  # type: ignore[no-untyped-def]
+            seen.append(request)
+            return super().build(request)
+
+    loop = build_loop(
+        ScriptedModel(LLMResponse(content="ok")),
+        tmp_path,
+        context=RecordingContext(tmp_path),
+        tools=registry(ProbeTool(name="echo")),
+        runtime=AgentRuntimeConfig(max_iterations=7, context_budget_tokens=4321),
+    )
+
+    await loop.run_once("hello", "cli:test")
+
+    request = seen[0]
+    assert request.user_input == "hello"  # type: ignore[attr-defined]
+    assert request.history == []  # type: ignore[attr-defined]
+    assert request.session_key == "cli:test"  # type: ignore[attr-defined]
+    assert request.budget_tokens == 4321  # type: ignore[attr-defined]
+    # The tool schemas travel with the request so the budget can see them.
+    assert [definition["function"]["name"] for definition in request.tools] == ["echo"]  # type: ignore[attr-defined]

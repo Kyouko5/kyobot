@@ -6,8 +6,8 @@
 
 Standard library ``argparse`` only: the framework keeps its runtime dependency
 list at one entry (``openai``, ADR-0006) and the CLI is thin enough not to need
-a framework. Assembly lives in :func:`build_agent_loop`; Phase 3 lifts it into
-``runtime.py`` once the pieces are decoupled.
+a framework. Since Phase 3 the CLI does no assembly at all: it calls
+``myagent.runtime.build_agent()``.
 """
 
 from __future__ import annotations
@@ -17,34 +17,18 @@ import asyncio
 import sys
 from collections.abc import Sequence
 
-from myagent.agent.context import ContextBuilder
-from myagent.agent.loop import AgentLoop, MessageBus
+from myagent.agent.loop import AgentLoop
 from myagent.config.env import MissingEnvError
-from myagent.config.settings import AgentSettings, LLMSettings
-from myagent.models.openai_compat import OpenAICompatModel
+from myagent.config.settings import LLMSettings
 from myagent.observability.logging import configure_logging
-from myagent.session.manager import DEFAULT_SESSION_KEY, SessionManager
-from myagent.tools.builtin import build_default_registry
+from myagent.runtime import build_agent
+from myagent.session.base import DEFAULT_SESSION_KEY
 
-__all__ = ["build_agent_loop", "main"]
+__all__ = ["main"]
 
 _PROMPT = "you> "
 _ANSWER_PREFIX = "agent> "
 _COMMANDS = ("/exit", "/quit", "/session", "/clear")
-
-
-def build_agent_loop(*, bus: MessageBus | None = None) -> AgentLoop:
-    """Assemble the runtime from the environment (the Phase 2 wiring point)."""
-    agent_settings = AgentSettings.from_env()
-    llm_settings = LLMSettings.from_env()
-    return AgentLoop(
-        model=OpenAICompatModel(llm_settings),
-        tools=build_default_registry(agent_settings),
-        context=ContextBuilder(agent_settings.workspace),
-        sessions=SessionManager.from_settings(agent_settings),
-        settings=agent_settings,
-        bus=bus,
-    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -77,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _list_tools() -> int:
     """Print the registered tools; needs no credentials, so it works offline."""
-    tools = build_default_registry(AgentSettings.from_env())
+    tools = build_agent().tools
     for name in sorted(tools.tool_names):
         tool = tools.get(name)
         assert tool is not None  # names come from the registry itself
@@ -96,7 +80,7 @@ def _chat(args: argparse.Namespace) -> int:
         print(f"myagent: {exc}", file=sys.stderr)
         return 2
 
-    loop = build_agent_loop()
+    loop = build_agent()
     if args.message:
         print(asyncio.run(loop.run_once(args.message, args.session)))
         return 0

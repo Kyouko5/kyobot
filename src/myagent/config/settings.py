@@ -382,3 +382,31 @@ class AgentSettings:
             if sessions_dir
             else DEFAULT_AGENT_SESSIONS_DIR,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """Every settings object the framework needs, read from one ``.env``.
+
+    This is the single entry point for assembly (PLAN 3.5): ``build_agent()``
+    takes one :class:`Settings` and passes each part to the component that needs
+    it. Components never read environment variables themselves, so a test can
+    hand them settings built by hand.
+    """
+
+    llm: LLMSettings
+    agent: AgentSettings
+    sqlite: SQLiteSettings
+    qdrant: QdrantSettings
+    embedding: EmbeddingSettings
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        """Build the whole settings bundle from the environment."""
+        return cls(
+            llm=LLMSettings.from_env(),
+            agent=AgentSettings.from_env(),
+            sqlite=SQLiteSettings.from_env(),
+            qdrant=QdrantSettings.from_env(),
+            embedding=EmbeddingSettings.from_env(),
+        )

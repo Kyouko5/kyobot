@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from myagent import cli
+from myagent.runtime import build_agent
 
 
 class FakeSessions:
@@ -58,7 +59,7 @@ def test_tools_lists_the_registered_tools(capsys):
 
 def test_chat_with_a_message_prints_the_answer(capsys, monkeypatch, isolated_env):
     loop = FakeLoop("42")
-    monkeypatch.setattr(cli, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
 
     exit_code = cli.main(["chat", "-m", "what is the answer?", "-s", "cli:test"])
 
@@ -87,7 +88,7 @@ def test_chat_without_a_key_explains_the_missing_variable(capsys, monkeypatch, i
 
 def test_interactive_chat_handles_commands_and_eof(capsys, monkeypatch, isolated_env):
     loop = FakeLoop("pong")
-    monkeypatch.setattr(cli, "build_agent_loop", lambda: loop)
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
     replies = iter(["ping", "/session", "/clear", "", "/exit"])
 
     def fake_input(prompt: str = "") -> str:
@@ -108,7 +109,7 @@ def test_interactive_chat_handles_commands_and_eof(capsys, monkeypatch, isolated
 
 
 def test_interactive_chat_stops_at_end_of_input(capsys, monkeypatch, isolated_env):
-    monkeypatch.setattr(cli, "build_agent_loop", lambda: FakeLoop())
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: FakeLoop())
 
     def fake_input(prompt: str = "") -> str:
         raise EOFError
@@ -120,7 +121,7 @@ def test_interactive_chat_stops_at_end_of_input(capsys, monkeypatch, isolated_en
 
 
 def test_quit_command_stops_the_loop(capsys, monkeypatch, isolated_env):
-    monkeypatch.setattr(cli, "build_agent_loop", lambda: FakeLoop())
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: FakeLoop())
     monkeypatch.setattr(builtins, "input", lambda prompt="": "/quit")
 
     assert cli.main(["chat"]) == 0
@@ -144,13 +145,13 @@ def test_python_dash_m_runs_the_cli(monkeypatch, capsys):
     assert "calculator" in capsys.readouterr().out
 
 
-def test_build_agent_loop_wires_the_runtime(monkeypatch, tmp_path):
+def test_the_cli_builds_the_runtime_through_build_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path))
     monkeypatch.setenv("AGENT_SESSIONS_DIR", str(tmp_path / "sessions"))
 
-    loop = cli.build_agent_loop()
+    loop = build_agent()
 
     assert sorted(loop.tools.tool_names) == [
         "calculator",
@@ -162,9 +163,9 @@ def test_build_agent_loop_wires_the_runtime(monkeypatch, tmp_path):
     assert loop.context.system_prompt().count("workspace root") == 1
 
 
-def test_build_agent_loop_can_take_a_bus():
+def test_build_agent_can_take_a_bus():
     from myagent.agent.loop import MessageBus
 
     bus: Any = MessageBus()
 
-    assert cli.build_agent_loop(bus=bus).bus is bus
+    assert build_agent(bus=bus).bus is bus

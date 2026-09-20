@@ -9,6 +9,11 @@ with two deliberate simplifications:
   ``required``, ``additionalProperties``, nested ``properties`` / ``items``);
 * the ``@tool_parameters`` decorator is dropped — four tools are cheaper to read
   with an explicit ``parameters`` property than with class rewriting.
+
+Phase 3 splits contract from convenience: :class:`BaseTool` is the structural
+type the registry and the runner depend on, while :class:`Tool` is an ABC that
+implements it so a built-in tool only has to declare ``parameters`` and
+``execute`` (PLAN 3.4, ADR-0007).
 """
 
 from __future__ import annotations
@@ -16,9 +21,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-__all__ = ["Tool", "ToolResult", "resolve_type", "validate_schema_value"]
+__all__ = ["BaseTool", "Tool", "ToolResult", "resolve_type", "validate_schema_value"]
 
 _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
     "string": str,
@@ -143,8 +148,48 @@ def validate_schema_value(value: Any, schema: Mapping[str, Any], path: str = "")
     return errors
 
 
+@runtime_checkable
+class BaseTool(Protocol):
+    """What the registry, the runner and the model need from a tool."""
+
+    name: str
+    description: str
+    read_only: bool
+    exclusive: bool
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """JSON Schema for the tool arguments."""
+        ...
+
+    @property
+    def concurrency_safe(self) -> bool:
+        """Whether this tool may run in the same batch as other safe tools."""
+        ...
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        """Run the tool; failures come back as ``ToolResult.error(...)``."""
+        ...
+
+    def to_schema(self) -> dict[str, Any]:
+        """The OpenAI ``tools`` entry for this tool."""
+        ...
+
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Apply safe, schema-driven casts before validation."""
+        ...
+
+    def validate_params(self, params: Any) -> list[str]:
+        """Validate arguments against the schema; empty list means valid."""
+        ...
+
+
 class Tool(ABC):
     """One capability the model may call.
+
+    The convenience implementation of :class:`BaseTool`: subclasses declare
+    ``parameters`` and ``execute``, and inherit schema, casting and validation.
+    Nothing has to inherit from it — the registry only looks at the shape.
 
     ``read_only`` / ``exclusive`` feed :attr:`concurrency_safe`, which the runner
     uses to decide whether calls may run in the same ``asyncio.gather`` batch

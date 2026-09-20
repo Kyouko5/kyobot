@@ -27,6 +27,7 @@ from myagent.config.settings import (
     EmbeddingSettings,
     LLMSettings,
     QdrantSettings,
+    Settings,
     SQLiteSettings,
 )
 
@@ -349,3 +350,18 @@ def test_agent_numbers_are_parsed_from_the_environment(isolated_environ, name, v
 def test_agent_settings_are_validated(kwargs, message):
     with pytest.raises(ValueError, match=message):
         AgentSettings(**kwargs)
+
+
+def test_settings_from_env_bundles_every_section(isolated_environ):
+    isolated_environ["LLM_MODEL"] = "test-model"
+    isolated_environ["AGENT_WORKSPACE"] = "/tmp/ws"
+    isolated_environ["MYAGENT_SQLITE_PATH"] = "/tmp/myagent.db"
+
+    settings = Settings.from_env()
+
+    assert isinstance(settings, Settings)
+    assert settings.llm.model == "test-model"
+    assert settings.agent.workspace == Path("/tmp/ws")
+    assert settings.sqlite.path == Path("/tmp/myagent.db")
+    assert isinstance(settings.qdrant, QdrantSettings)
+    assert isinstance(settings.embedding, EmbeddingSettings)
