@@ -16,10 +16,12 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-# Phase 0 deliberately ships a dependency-free runtime: the framework core is
-# rebuilt on the standard library first, and every later dependency must be
-# justified by a phase (see docs/development.md, "依赖管理").
-dependencies = []
+# The runtime stays as small as possible: the framework core is rebuilt on the
+# standard library, and every dependency must be justified by a decision record
+# (see docs/development.md, "依赖管理").
+dependencies = [
+    "python-dotenv>=1.0", # ADR-0004: .env loading is the only secret entry point
+]
 
 [project.optional-dependencies]
 dev = [

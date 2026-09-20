@@ -26,6 +26,8 @@ htmlcov/
 *.local
 *.log
 myagent-data/
+data/
+*.sqlite3
 
 # Editors and OS
 .DS_Store
