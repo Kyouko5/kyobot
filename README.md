@@ -12,7 +12,7 @@
 | 阶段 | 目标 | 状态 |
 | --- | --- | --- |
 | Phase 0 | 项目准备：环境、仓库、开发规范、nanobot 跑通 | ✅ 已完成 |
-| Phase 1 | nanobot 源码理解（Agent Runtime / Memory / Tool / Session） | ⬜ 未开始 |
+| Phase 1 | nanobot 源码理解（Agent Runtime / Memory / Tool / Session） | ✅ 已完成 |
 | Phase 2 | 核心代码迁移：Model / Tool / Runner / Loop 抽象 | ⬜ 未开始 |
 | Phase 3 | Agent Framework 重构：模块职责与接口 | ⬜ 未开始 |
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ⬜ 未开始 |
@@ -64,11 +64,15 @@ kyobot/
 │   └── observability/          # 日志等可观测性基础件
 ├── tests/                      # pytest 测试
 ├── docs/                       # 设计文档、ADR、阶段记录
-│   ├── architecture.md         # nanobot Baseline 架构与消息流（Phase 0 验收材料）
+│   ├── architecture.md         # 架构总览：启动路径 / 消息流 / 模块地图
+│   ├── agent-loop.md           # AgentLoop 与 AgentRunner 深潜
+│   ├── tool-system.md          # Tool 契约 / Registry / 发现 / 执行
+│   ├── context.md              # 上下文组装 / 预算 / 压缩
+│   ├── memory.md               # Session vs Memory / 归档 / Dream
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
 │   └── records/                # 阶段工作记录
-├── scripts/                    # bootstrap.sh / check.sh
+├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 └── nanobot/                    # 上游只读参照，不参与构建（git ignored）
 ```
@@ -85,7 +89,19 @@ kyobot/
 
 ## 文档索引
 
-- [`docs/architecture.md`](./docs/architecture.md)：nanobot 如何启动、一条用户消息经过哪些模块，以及本项目的迁移计划。
+**上游源码理解（Phase 1 产出）**
+
+- [`docs/architecture.md`](./docs/architecture.md)：nanobot 如何启动、一条消息经过哪些模块、四条关键边界与模块地图。
+- [`docs/agent-loop.md`](./docs/agent-loop.md)：7 阶段流水线、Runner 主循环、迭代上限、中途注入、checkpoint。
+- [`docs/tool-system.md`](./docs/tool-system.md)：Tool 契约与 Schema、Registry 校验网关、自动发现、并发执行与错误语义。
+- [`docs/context.md`](./docs/context.md)：system prompt 分层、预算公式、四步拟合、摘要压缩与空闲压缩。
+- [`docs/memory.md`](./docs/memory.md)：Session 与 Memory 的边界、history.jsonl、摘要检查点、Dream 整合。
+
+> 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 326 个锚点全部解析通过），避免文档与上游源码脱节。
+
+**工程与决策**
+
 - [`docs/development.md`](./docs/development.md)：Python / 测试 / Git / Logging / 文档规范。
 - [`docs/decision-records/0001-project-layout-and-tooling.md`](./docs/decision-records/0001-project-layout-and-tooling.md)：目录布局与工具链选型。
 - [`docs/decision-records/0002-nanobot-as-read-only-reference.md`](./docs/decision-records/0002-nanobot-as-read-only-reference.md)：为什么把 nanobot 当作只读参照而不是 fork。

@@ -159,6 +159,13 @@ pre-commit run --all-files
 | 决策记录（ADR） | `docs/decision-records/NNNN-<slug>.md` | 一个决策一份，含备选方案与后果 |
 | 阶段记录 | `docs/records/phase-<N>-<slug>.md` | 见下方模板 |
 
+文档里引用上游代码时统一写「包内相对路径 + 行号」（如 `agent/loop.py:196`），
+并用 `scripts/check_doc_anchors.py` 校验（需要本地 `nanobot/` 参照，CI 中不可用）：
+
+```bash
+.venv/bin/python scripts/check_doc_anchors.py    # 校验 docs/、README.md、PLAN.md 的 file.py:行号 引用
+```
+
 阶段记录模板（沿用计划书的证据原则：结论必须可复现）：
 
 ```markdown
