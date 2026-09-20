@@ -26,6 +26,12 @@ def isolated_environ(monkeypatch):
     return copy
 
 
+@pytest.fixture
+def no_env_override(monkeypatch):
+    """Let discovery run normally (conftest pins ``MYAGENT_ENV_FILE`` for isolation)."""
+    monkeypatch.delenv(ENV_FILE_VAR, raising=False)
+
+
 def write_env(path: Path, **values: str) -> Path:
     env_file = path / ".env"
     env_file.write_text(
@@ -43,7 +49,9 @@ def test_load_env_reads_a_file_through_load_dotenv(tmp_path, isolated_environ):
     assert isolated_environ["LLM_API_KEY"] == "sk-test"
 
 
-def test_load_env_returns_none_when_no_file_is_found(tmp_path, isolated_environ, monkeypatch):
+def test_load_env_returns_none_when_no_file_is_found(
+    tmp_path, isolated_environ, monkeypatch, no_env_override
+):
     monkeypatch.chdir(tmp_path)
 
     assert discover_env_file() is None
@@ -91,7 +99,7 @@ def test_env_file_variable_must_point_at_a_real_file(tmp_path, isolated_environ)
 
 
 def test_discover_env_file_searches_upwards_from_the_working_directory(
-    tmp_path, isolated_environ, monkeypatch
+    tmp_path, isolated_environ, monkeypatch, no_env_override
 ):
     write_env(tmp_path, MYAGENT_LOG_FORMAT="json")
     nested = tmp_path / "src" / "myagent"
@@ -101,7 +109,9 @@ def test_discover_env_file_searches_upwards_from_the_working_directory(
     assert discover_env_file() == tmp_path / ".env"
 
 
-def test_discover_env_file_can_look_in_one_directory_only(tmp_path, isolated_environ):
+def test_discover_env_file_can_look_in_one_directory_only(
+    tmp_path, isolated_environ, no_env_override
+):
     assert discover_env_file(start=tmp_path) is None
 
     env_file = write_env(tmp_path, MYAGENT_LOG_LEVEL="DEBUG")

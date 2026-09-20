@@ -9,12 +9,23 @@ import pytest
 
 from myagent.config.env import MissingEnvError
 from myagent.config.settings import (
+    DEFAULT_AGENT_MAX_ITERATIONS,
+    DEFAULT_AGENT_MAX_TOOL_RESULT_CHARS,
+    DEFAULT_AGENT_SESSIONS_DIR,
+    DEFAULT_AGENT_TOOL_TIMEOUT_S,
+    DEFAULT_AGENT_WORKSPACE,
     DEFAULT_EMBED_MODEL_NAME,
     DEFAULT_EMBED_MODEL_TYPE,
+    DEFAULT_LLM_CONTEXT_WINDOW,
+    DEFAULT_LLM_MAX_TOKENS,
+    DEFAULT_LLM_PROVIDER,
+    DEFAULT_LLM_TEMPERATURE,
     DEFAULT_QDRANT_COLLECTION,
     DEFAULT_QDRANT_URL,
     DEFAULT_SQLITE_PATH,
+    AgentSettings,
     EmbeddingSettings,
+    LLMSettings,
     QdrantSettings,
     SQLiteSettings,
 )
@@ -26,13 +37,6 @@ def isolated_environ(monkeypatch):
     copy = dict(os.environ)
     monkeypatch.setattr(os, "environ", copy)
     return copy
-
-
-@pytest.fixture(autouse=True)
-def empty_env_file(tmp_path, isolated_environ, monkeypatch):
-    """Keep the real project .env out of these tests."""
-    monkeypatch.setenv("MYAGENT_ENV_FILE", str(tmp_path / ".env"))
-    (tmp_path / ".env").write_text("", encoding="utf-8")
 
 
 def test_storage_defaults_need_no_configuration():
@@ -195,3 +199,153 @@ def test_qdrant_url_must_be_http(url):
 def test_qdrant_collection_name_is_validated(collection):
     with pytest.raises(ValueError, match="invalid Qdrant collection name"):
         QdrantSettings(collection=collection)
+
+
+def test_llm_defaults_need_no_configuration():
+    llm = LLMSettings.from_env()
+
+    assert llm.provider == DEFAULT_LLM_PROVIDER == "openai_compat"
+    assert llm.model is None
+    assert llm.api_key is None
+    assert llm.base_url is None
+    assert llm.resolved_base_url() == "https://api.openai.com/v1"
+    assert llm.max_tokens == DEFAULT_LLM_MAX_TOKENS
+    assert llm.context_window == DEFAULT_LLM_CONTEXT_WINDOW
+    assert llm.temperature == DEFAULT_LLM_TEMPERATURE
+
+
+def test_llm_reads_the_env_file(isolated_environ, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "LLM_PROVIDER=OpenAI_Compat",
+                "LLM_MODEL=deepseek-v4.1-flash",
+                "LLM_API_KEY=sk-llm",
+                "LLM_BASE_URL=https://example.com/compatible-mode/v1",
+                "LLM_MAX_TOKENS=2048",
+                "LLM_CONTEXT_WINDOW=64000",
+                "LLM_TEMPERATURE=0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    isolated_environ["MYAGENT_ENV_FILE"] = str(env_file)
+
+    llm = LLMSettings.from_env()
+
+    assert llm.provider == "openai_compat"
+    assert llm.require_model() == "deepseek-v4.1-flash"
+    assert llm.require_api_key() == "sk-llm"
+    assert llm.resolved_base_url() == "https://example.com/compatible-mode/v1"
+    assert llm.max_tokens == 2048
+    assert llm.context_window == 64000
+    assert llm.temperature == 0
+
+
+def test_llm_api_key_falls_back_to_the_openai_variable(isolated_environ):
+    isolated_environ["LLM_API_KEY"] = ""
+    isolated_environ["OPENAI_API_KEY"] = "openai-key"
+
+    assert LLMSettings.from_env().api_key == "openai-key"
+
+
+def test_llm_requires_a_model_and_a_key_before_use():
+    with pytest.raises(MissingEnvError, match="LLM_MODEL"):
+        LLMSettings().require_model()
+    with pytest.raises(MissingEnvError, match="LLM_API_KEY"):
+        LLMSettings().require_api_key()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"provider": "anthropic"}, "unsupported LLM provider"),
+        ({"model": "   "}, "LLM_MODEL must not be blank"),
+        ({"base_url": "example.com/v1"}, "LLM_BASE_URL must start with"),
+        ({"max_tokens": 0}, "LLM_MAX_TOKENS must be positive"),
+        ({"context_window": -1}, "LLM_CONTEXT_WINDOW must be positive"),
+        ({"temperature": -0.1}, "LLM_TEMPERATURE must not be negative"),
+    ],
+)
+def test_llm_settings_are_validated(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        LLMSettings(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("LLM_MAX_TOKENS", "many", "LLM_MAX_TOKENS must be an integer"),
+        ("LLM_MAX_TOKENS", "0", "LLM_MAX_TOKENS must be positive"),
+        ("LLM_CONTEXT_WINDOW", "0", "LLM_CONTEXT_WINDOW must be positive"),
+        ("LLM_TEMPERATURE", "warm", "LLM_TEMPERATURE must be a number"),
+        ("LLM_TEMPERATURE", "-1", "LLM_TEMPERATURE must not be negative"),
+    ],
+)
+def test_llm_numbers_are_parsed_from_the_environment(isolated_environ, name, value, message):
+    isolated_environ[name] = value
+
+    with pytest.raises(ValueError, match=message):
+        LLMSettings.from_env()
+
+
+def test_agent_defaults_need_no_configuration():
+    agent = AgentSettings.from_env()
+
+    assert agent.max_iterations == DEFAULT_AGENT_MAX_ITERATIONS
+    assert agent.tool_timeout_s == DEFAULT_AGENT_TOOL_TIMEOUT_S
+    assert agent.max_tool_result_chars == DEFAULT_AGENT_MAX_TOOL_RESULT_CHARS
+    assert agent.workspace == DEFAULT_AGENT_WORKSPACE
+    assert agent.sessions_dir == DEFAULT_AGENT_SESSIONS_DIR
+
+
+def test_agent_settings_read_the_env_file(isolated_environ, tmp_path):
+    isolated_environ["AGENT_MAX_ITERATIONS"] = "3"
+    isolated_environ["AGENT_TOOL_TIMEOUT_S"] = "1.5"
+    isolated_environ["AGENT_MAX_TOOL_RESULT_CHARS"] = "128"
+    isolated_environ["AGENT_WORKSPACE"] = "~/work"
+    isolated_environ["AGENT_SESSIONS_DIR"] = "~/sessions"
+
+    agent = AgentSettings.from_env()
+
+    assert agent.max_iterations == 3
+    assert agent.tool_timeout_s == 1.5
+    assert agent.max_tool_result_chars == 128
+    assert agent.workspace == Path("~/work").expanduser()
+    assert agent.sessions_dir == Path("~/sessions").expanduser()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("AGENT_MAX_ITERATIONS", "lots", "AGENT_MAX_ITERATIONS must be an integer"),
+        ("AGENT_MAX_ITERATIONS", "0", "AGENT_MAX_ITERATIONS must be positive"),
+        ("AGENT_TOOL_TIMEOUT_S", "0", "AGENT_TOOL_TIMEOUT_S must be positive"),
+        ("AGENT_TOOL_TIMEOUT_S", "soon", "AGENT_TOOL_TIMEOUT_S must be a number"),
+        (
+            "AGENT_MAX_TOOL_RESULT_CHARS",
+            "-5",
+            "AGENT_MAX_TOOL_RESULT_CHARS must be positive",
+        ),
+    ],
+)
+def test_agent_numbers_are_parsed_from_the_environment(isolated_environ, name, value, message):
+    isolated_environ[name] = value
+
+    with pytest.raises(ValueError, match=message):
+        AgentSettings.from_env()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_iterations": 0}, "AGENT_MAX_ITERATIONS must be positive"),
+        ({"tool_timeout_s": 0}, "AGENT_TOOL_TIMEOUT_S must be positive"),
+        ({"max_tool_result_chars": 0}, "AGENT_MAX_TOOL_RESULT_CHARS must be positive"),
+    ],
+)
+def test_agent_settings_are_validated(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        AgentSettings(**kwargs)

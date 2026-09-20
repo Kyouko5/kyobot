@@ -21,6 +21,7 @@ classifiers = [
 # (see docs/development.md, "依赖管理").
 dependencies = [
     "python-dotenv>=1.0", # ADR-0004: .env loading is the only secret entry point
+    "openai>=1.50", # ADR-0006: one OpenAI-compatible client covers every Phase 2 provider
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,9 @@ dev = [
     "mypy>=1.13",
     "pre-commit>=4.0",
 ]
+
+[project.scripts]
+myagent = "myagent.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/myagent"]
@@ -64,6 +68,13 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN001", "ANN201", "ANN202", "ANN401"]
+# The tool and provider boundaries are dynamic on purpose: tool arguments arrive
+# as parsed JSON and provider payloads are SDK objects (PLAN 2.2 / 2.3). `Any` is
+# contained to those edges; the rest of the framework stays strictly typed.
+"src/myagent/tools/base.py" = ["ANN401"]
+"src/myagent/tools/registry.py" = ["ANN401"]
+"src/myagent/tools/builtin/*.py" = ["ANN401"]
+"src/myagent/models/openai_compat.py" = ["ANN401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["myagent"]
@@ -87,6 +98,8 @@ exclude_lines = [
     "raise NotImplementedError",
     "def __repr__",
     "if __name__ == .__main__.:",
+    # Protocol / abstract method bodies ("...") never run.
+    '^\s*\.\.\.\s*$',
 ]
 
 [tool.mypy]

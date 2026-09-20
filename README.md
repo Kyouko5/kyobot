@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | Phase 0 | 项目准备：环境、仓库、开发规范、nanobot 跑通 | ✅ 已完成 |
 | Phase 1 | nanobot 源码理解（Agent Runtime / Memory / Tool / Session） | ✅ 已完成 |
-| Phase 2 | 核心代码迁移：Model / Tool / Runner / Loop 抽象 | ⬜ 未开始 |
+| Phase 2 | 核心代码迁移：Model / Tool / Runner / Loop 抽象 | ✅ 已完成 |
 | Phase 3 | Agent Framework 重构：模块职责与接口 | ⬜ 未开始 |
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ⬜ 未开始 |
 | Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ⬜ 未开始 |
@@ -37,7 +37,17 @@ source .venv/bin/activate
 
 # 3. 质量门：ruff format --check / ruff check / mypy / pytest + coverage
 scripts/check.sh
+
+# 4. 对话（.env 里配好 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 后）
+myagent chat -m "现在几点？顺便用 calculator 算一下 (12+8)*3"
+myagent chat                 # 交互模式：/exit 退出、/session 看会话 key、/clear 清空历史
+myagent tools                # 列出已注册工具（离线可用，不需要密钥）
 ```
+
+Phase 2 之后的 Framework V1 已经可以独立运行：把只读参照 `nanobot/` 删掉，上面的命令照常工作
+（真实运行记录见 [`docs/records/phase-2-migration.md`](./docs/records/phase-2-migration.md)）。
+对话会以 JSONL 追加写入 `data/sessions/`（已 git 忽略），工具读写的沙箱目录默认是 `workspace/`
+（其中的 `project-notes.md` 是给 `read_file` / `search_local` 用的示例语料）。
 
 密钥统一通过 `python-dotenv` 的 `load_dotenv()` 读取（`MYAGENT_ENV_FILE` 可指向别处的 `.env`）：
 
@@ -60,10 +70,18 @@ kyobot/
 ├── PLAN.md                     # 项目计划与验收标准（唯一路线入口）
 ├── pyproject.toml              # 打包、ruff、mypy、pytest、coverage 配置
 ├── src/myagent/                # Framework 本体
-│   ├── config/                 # .env 加载、类型化设置（SQLite / Qdrant）
-│   └── observability/          # 日志等可观测性基础件
-├── tests/                      # pytest 测试
+│   ├── agent/                  # types / runner（模型↔工具循环）/ loop（4 阶段）/ context
+│   ├── models/                 # BaseModel 协议 + OpenAI 兼容实现
+│   ├── tools/                  # Tool 契约 / schema 校验 / Registry / builtin 四个工具
+│   ├── session/                # JSONL 会话存储（追加式 + last_archived 预留）
+│   ├── memory/                 # V1 记忆接口 + 文件实现（Phase 4 接线）
+│   ├── config/                 # .env 加载、类型化设置（LLM / Agent / SQLite / Qdrant）
+│   ├── observability/          # 日志等可观测性基础件
+│   └── cli.py                  # myagent chat / myagent tools
+├── tests/                      # pytest 测试（258 项，覆盖率 100%）
+├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
+│   ├── design.md               # Phase 2 设计：模块地图 / 契约 / 与上游的差异表
 │   ├── architecture.md         # 架构总览：启动路径 / 消息流 / 模块地图
 │   ├── agent-loop.md           # AgentLoop 与 AgentRunner 深潜
 │   ├── tool-system.md          # Tool 契约 / Registry / 发现 / 执行
@@ -74,6 +92,7 @@ kyobot/
 │   └── records/                # 阶段工作记录
 ├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
+├── data/                       # 本地运行状态：会话 JSONL（git 忽略）
 └── nanobot/                    # 上游只读参照，不参与构建（git ignored）
 ```
 
@@ -86,6 +105,8 @@ kyobot/
 | Embedding | 阿里云 DashScope（`qwen3.7-text-embedding-flash`，OpenAI 兼容模式） | ADR-0005 |
 | 配置与密钥 | `.env` + `python-dotenv` 的 `load_dotenv()`，环境变量优先 | ADR-0004 |
 | Agent Runtime | 自研（对照 nanobot 的 Loop / Runner 拆分重新抽象） | ADR-0001、ADR-0002 |
+| 模型客户端 | `openai>=1.50`（AsyncOpenAI），只被 `models/openai_compat.py` 依赖 | ADR-0006 |
+| CLI | 标准库 `argparse`（不引 typer / rich / click） | ADR-0006 |
 
 ## 文档索引
 
@@ -97,8 +118,14 @@ kyobot/
 - [`docs/context.md`](./docs/context.md)：system prompt 分层、预算公式、四步拟合、摘要压缩与空闲压缩。
 - [`docs/memory.md`](./docs/memory.md)：Session 与 Memory 的边界、history.jsonl、摘要检查点、Dream 整合。
 
+**Framework 设计与实现（Phase 2 产出）**
+
+- [`docs/design.md`](./docs/design.md)：Framework V1 的模块地图、一次请求经过哪些代码、模块契约，以及与上游的「保留 / 简化 / 加法」差异表。
+- [`docs/decision-records/0006-phase2-dependencies.md`](./docs/decision-records/0006-phase2-dependencies.md)：为什么引入 `openai`、为什么 CLI 用 `argparse`，以及备选方案。
+- [`docs/records/phase-2-migration.md`](./docs/records/phase-2-migration.md)：Phase 2 工作记录（含「删掉 nanobot 后」的真实 transcript 与落盘结构）。
+
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 326 个锚点全部解析通过），避免文档与上游源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 494 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 

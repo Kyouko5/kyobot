@@ -459,6 +459,10 @@ src/myagent/
 依赖与决策：本阶段引入 `openai>=1.50`（OpenAI 兼容客户端）；CLI 用标准库 `argparse`
 （不引入 typer/rich，保持运行时依赖最小）；两条都记入 ADR-0006「Phase 2 新增依赖的理由」。
 
+结果（2026-09-20）：目录按上表落地，另有 4 个计划外文件——`agent/__init__.py`、
+`memory/__init__.py`、`tools/builtin/paths.py`（工作区路径校验，被 `read_file` / `search_local`
+复用）、`src/myagent/__main__.py`（支持 `python -m myagent`）。
+
 ## 2.2 Model 抽象（models/）
 
 设计：
@@ -493,12 +497,17 @@ OpenAICompatModel   → base_url 指向 DashScope 兼容端点（LLM_BASE_URL）
 
 要求：
 
-* [ ] LLM 抽象（`BaseModel` + `LLMError` / `ContextWindowExceeded` 异常语义）
-* [ ] Message Format（user / assistant(tool_calls) / tool 三种角色，含 tool_call_id）
-* [ ] Tool Calling（`Tool.to_schema()` → OpenAI function，参数解析失败要能被上层看见）
-* [ ] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
+* [x] LLM 抽象（`BaseModel` + `LLMError` / `ContextWindowExceeded` 异常语义）
+      → `src/myagent/models/base.py:31`、`:71`
+* [x] Message Format（user / assistant(tool_calls) / tool 三种角色，含 tool_call_id）
+      → `src/myagent/agent/types.py:100`（`Message`，带 `to_dict` / `from_dict`）
+* [x] Tool Calling（`Tool.to_schema()` → OpenAI function，参数解析失败要能被上层看见）
+      → `src/myagent/tools/base.py:175`、`src/myagent/agent/types.py:30`（`parse_error` 承载解析失败）
+* [x] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
       `LLM_MAX_TOKENS` / `LLM_CONTEXT_WINDOW` / `AGENT_MAX_ITERATIONS`，沿用 `myagent.config` 的单入口风格）
-* [ ] `tests/test_models.py`：用假客户端验证请求形状、tool_calls 解析、错误映射（不打真实网络）
+      → `src/myagent/config/settings.py:258`（`LLMSettings`）、`:339`（`AgentSettings`）
+* [x] `tests/test_models.py`：用假客户端验证请求形状、tool_calls 解析、错误映射（不打真实网络）
+      → 382 行，覆盖请求形状、tool_calls 解析与 8 类错误映射
 
 ## 2.3 Tool 抽象（tools/）
 
@@ -542,8 +551,10 @@ read_file      只读，限制在工作区目录内
 search_local   受控的本地检索桩（Phase 7 替换为真实论文检索）
 ```
 
-* [ ] 4 个工具可被模型正确调用，参数错误时返回可读提示而不是抛异常
-* [ ] `tests/test_tools.py`：类型纠正（`"3"` → `3`）、schema 校验错误文案、名字纠错、并发分批、错误语义
+* [x] 4 个工具可被模型正确调用，参数错误时返回可读提示而不是抛异常
+      → `src/myagent/tools/builtin/__init__.py:30`（显式注册 4 个工具）
+* [x] `tests/test_tools.py`：类型纠正（`"3"` → `3`）、schema 校验错误文案、名字纠错、并发分批、错误语义
+      → 515 行；校验在 `src/myagent/tools/base.py:193`，纠错在 `src/myagent/tools/registry.py:60`
 
 ## 2.4 Agent Runner（agent/runner.py）
 
@@ -590,12 +601,16 @@ class AgentRunResult:
 
 增加：
 
-* [ ] max_iterations（`for iteration in range(...)` + 到上限后的统一收尾）
-* [ ] Tool timeout（单工具超时 + 超时转成可读工具错误）
-* [ ] Tool error handling（工具异常/ToolResult.error → 提示文本回灌，不中断本轮）
-* [ ] Tool result 截断（`max_tool_result_chars`）
-* [ ] termination condition（`stop_reason` 四个取值 + 空回复重试上限 2）
-* [ ] 中途注入（`injection_callback`，接口保留；Loop 侧 V1 可以先不启用）
+* [x] max_iterations（`for iteration in range(...)` + 到上限后的统一收尾）
+      → `src/myagent/agent/runner.py:90`、`:130`
+* [x] Tool timeout（单工具超时 + 超时转成可读工具错误）→ `src/myagent/agent/runner.py:181`
+* [x] Tool error handling（工具异常/ToolResult.error → 提示文本回灌，不中断本轮）
+      → `src/myagent/tools/registry.py:149`（统一追加 retry hint）
+* [x] Tool result 截断（`max_tool_result_chars`）→ `src/myagent/agent/runner.py:213`
+* [x] termination condition（`stop_reason` 四个取值 + 空回复重试上限 2）
+      → `src/myagent/agent/types.py:90`、`src/myagent/agent/runner.py:31`
+* [x] 中途注入（`injection_callback`，接口保留；Loop 侧 V1 可以先不启用）
+      → `src/myagent/agent/runner.py:188`（`_drain_injections`）
 
 **本阶段明确不做**（Phase 3/9 再评估）：长度续写（length recovery）、畸形 tool_calls 重试、
 provider 原生状态、三阶段 checkpoint 恢复。
@@ -625,10 +640,14 @@ save     追加新消息到 Session（JSONL，与上游一致的追加式存储�
 respond  生成 OutboundMessage / 直接返回文本
 ```
 
-* [ ] 会话内串行：`asyncio.Lock` per session_key（跨会话天然并发）
-* [ ] `run_once(user_input, session_key) -> str` 供 CLI 与测试直接调用
-* [ ] `run()` 消费 `MessageBus`（Phase 2 保留最小 Bus 实现）
-* [ ] Session 存储：JSONL + `last_archived` 字段预留（Phase 4 用），不做 workspace 命名空间迁移
+* [x] 会话内串行：`asyncio.Lock` per session_key（跨会话天然并发）
+      → `src/myagent/agent/loop.py:205`（`_session_lock`）
+* [x] `run_once(user_input, session_key) -> str` 供 CLI 与测试直接调用
+      → `src/myagent/agent/loop.py:128`（`run_once`）、`:141`（`_process` 串行入口）
+* [x] `run()` 消费 `MessageBus`（Phase 2 保留最小 Bus 实现）
+      → `src/myagent/agent/loop.py:42`
+* [x] Session 存储：JSONL + `last_archived` 字段预留（Phase 4 用），不做 workspace 命名空间迁移
+      → `src/myagent/session/manager.py:55`、`:129`（落盘为 `data/sessions/cli%3Adefault.jsonl`）
 
 ## 2.6 CLI
 
@@ -663,6 +682,20 @@ Response
 另外产出 `docs/design.md`（模块职责、接口签名、与上游的差异表）与
 `docs/decision-records/0006-phase2-dependencies.md`（新增依赖的理由）。
 
+结果（2026-09-20，均已落地）：
+
+| 产出 | 规模 | 内容 |
+| --- | ---: | --- |
+| `src/myagent/`（Framework 本体） | 30 个源文件 3112 行 | `agent/`（types · runner · loop · context）、`models/`、`tools/` + 4 个内置工具、`session/`、`memory/`（未接线）、`cli.py` + `__main__.py` |
+| `docs/design.md` | 407 行 | 模块地图、一次请求的代码路径、模块契约、与上游的差异表（保留 / 简化 / 加法）、本阶段不做的事 |
+| `docs/decision-records/0006-phase2-dependencies.md` | 57 行 | `openai>=1.50` 与标准库 `argparse` 的取舍、备选方案与后果 |
+| `docs/records/phase-2-migration.md` | 258 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 过程中修掉的两个真实 bug |
+| `tests/` | 15 个文件 2952 行 | 258 项测试（Phase 1 基线 63 项），覆盖率 100%（1499 stmts / 398 branches） |
+
+命令行入口由 `pyproject.toml` 的 `[project.scripts]` 暴露：
+`myagent chat` / `myagent chat -m "..."` / `myagent tools`，等价写法 `python -m myagent`
+（`src/myagent/__main__.py:1`）。
+
 ## 验收标准
 
 完全脱离 nanobot 仓库后：
@@ -675,9 +708,22 @@ kyobot（src/myagent）
 
 具体判定：
 
-* [ ] 把 `nanobot/` 移出仓库（或删除）后，`myagent chat -m "..."` 仍能完成一次对话 + 一次工具调用
-* [ ] `scripts/check.sh` 全绿（ruff / mypy strict / pytest），新增模块覆盖率不低于 Phase 0 基线
-* [ ] 真实 transcript（含一次 calculator 或 read_file 调用）写进 `docs/records/phase-2-migration.md`
+* [x] 把 `nanobot/` 移出仓库（或删除）后，`myagent chat -m "..."` 仍能完成一次对话 + 一次工具调用
+* [x] `scripts/check.sh` 全绿（ruff / mypy strict / pytest），新增模块覆盖率不低于 Phase 0 基线
+* [x] 真实 transcript（含一次 calculator 或 read_file 调用）写进 `docs/records/phase-2-migration.md`
+
+结论（证据见 `docs/records/phase-2-migration.md` §7）：
+
+1. **独立可运行**：验收时 `nanobot/` 被改名为 `nanobot.moved`，`myagent chat -m "..."` 正常回答；
+   模型在**一轮**里并行调用了 `current_time` / `calculator` / `read_file` 三个工具
+   （落盘第 3～6 行），同一会话的第二条消息复用历史把 60 再乘 2 得到 120。
+2. **质量门**：`scripts/check.sh` 全绿——46 个文件已格式化、mypy strict 覆盖 30 个源文件 0 问题、
+   258 项测试（1499 stmts / 398 branches，100% 覆盖），覆盖率不低于 Phase 1 基线（63 项测试、248 stmts）。
+3. **取舍可讲**：`docs/design.md` §4 把每一处差异归入「保留 / 简化 / 加法」，§5 列出本阶段不做的事
+   作为 Phase 3 的输入；过程中发现并修掉的两个真实问题（会话重复落盘、测试泄漏真实 `.env`）
+   连同修复与回归测试记在记录 §8。
+
+记录：`docs/records/phase-2-migration.md`
 
 ---
 
@@ -1938,8 +1984,10 @@ kyobot/
 
 MVP = Phase 0–8 的最小交集，每项都要有可判定的完成条件：
 
-* [ ] Agent Loop + Runner（会话内串行、`max_iterations`、工具错误回灌）
-* [ ] Tool Calling（schema 校验 + 并发分批 + 错误语义）
+* [x] Agent Loop + Runner（会话内串行、`max_iterations`、工具错误回灌）— Phase 2 已完成
+      （`src/myagent/agent/loop.py:205` 会话锁、`src/myagent/agent/runner.py:98` 迭代上限）
+* [x] Tool Calling（schema 校验 + 并发分批 + 错误语义）— Phase 2 已完成
+      （`src/myagent/tools/base.py:193` 校验、`src/myagent/agent/runner.py:220` 并发分批）
 * [ ] Session（JSONL + `last_archived` 边界 + 摘要检查点）
 * [ ] Memory（Episodic/Semantic 分开、写入过滤、向量召回）
 * [ ] Vector Retrieval（Qdrant + DashScope embedding，按文档过滤）
