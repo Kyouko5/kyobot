@@ -60,15 +60,20 @@ __all__ = ["MemoryExtractor", "Turn", "parse_candidates"]
 logger = get_logger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You extract long-term memories from one conversation turn.\n"
-    'Answer with JSON only: {"memories": [{"text": str, "kind": "episodic"|"semantic", '
-    '"importance": number}]}.\n'
-    "Rules: at most 3 records; one self-contained fact per record; under 200 characters; "
-    'use "semantic" for stable preferences, facts and project knowledge, "episodic" for '
-    "what happened in this turn.\n"
-    "Never store small talk, one-off lookups, raw tool output, credentials or private data."
+    "Extract only long-term useful memories from this conversation turn.\n"
+    'Return JSON only: {"memories":[{"text":"...","kind":"semantic|episodic","importance":0.0}]}\n'
+    "Rules:\n"
+    "- Max 3 memories; one self-contained fact per memory; concise.\n"
+    "- semantic = stable facts/preferences/projects/goals; "
+    "episodic = important events/decisions from this turn.\n"
+    "- importance is 0.0–1.0 for long-term memory value, NOT confidence or relevance: "
+    "1.0 critical, 0.8–0.9 highly useful, 0.6–0.7 useful, "
+    "0.5 borderline, <0.5 usually discard.\n"
+    "- Store only information explicitly stated or clearly established by the user.\n"
+    "- Do not store small talk, one-off lookups, raw tool output, secrets, "
+    "or temporary low-value details.\n"
+    '- If nothing is worth remembering, return {"memories":[]}.'
 )
-
 _MAX_PROMPT_CHARS = 4_000
 
 # --- the do-not-write list of PLAN 4.6 -------------------------------------
