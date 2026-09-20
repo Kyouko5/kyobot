@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "python-dotenv>=1.0", # ADR-0004: .env loading is the only secret entry point
     "openai>=1.50", # ADR-0006: one OpenAI-compatible client covers every Phase 2 provider
+    "qdrant-client>=1.12", # ADR-0003/0008: the vector index behind myagent.memory.vector_index
 ]
 
 [project.optional-dependencies]
@@ -64,7 +65,11 @@ select = [
     "ASYNC", # flake8-async
     "ANN", # flake8-annotations (type annotations are a project requirement)
 ]
-ignore = ["E501"]
+# RUF001/002/003 flag full-width CJK punctuation as "ambiguous" Latin look-alikes.
+# They are not ambiguous here: the write policy matches Chinese text (where 。！？；
+# are the correct characters), and comments/docstrings quote the plan's Chinese.
+# The non-obvious ones are pinned: keywords have Chinese comments in the code.
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN001", "ANN201", "ANN202", "ANN401"]
@@ -108,3 +113,17 @@ files = ["src"]
 strict = true
 warn_unreachable = true
 pretty = true
+
+# qdrant-client depends on numpy, whose 2.5 stubs use PEP 695 ``type`` statements
+# that mypy cannot parse while targeting Python 3.11. numpy is a transitive
+# dependency we never annotate against ourselves, so it is skipped rather than
+# raising the whole project's target version.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+# ``follow_imports = "skip"`` alone still makes mypy *parse* a stub, and the
+# numpy 2.5 stubs open with PEP 695 ``type`` aliases that mypy refuses while
+# targeting 3.11. This flag ("respect skip for stubs too") is what keeps them
+# out of the build entirely; numpy is a transitive dependency of qdrant-client
+# that this project never annotates against itself.
+follow_imports_for_stubs = true

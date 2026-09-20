@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from fakes import ScriptedModel, call, tool_response
+from fakes import BrokenMemory, NullMemory, ScriptedModel, call, tool_response
 from myagent.agent import context as context_module
 from myagent.agent import loop as loop_module
 from myagent.agent import runner as runner_module
@@ -23,6 +23,7 @@ from myagent.agent.context import (
     ContextBundle,
     ContextManager,
     ContextRequest,
+    MemoryProvider,
 )
 from myagent.agent.loop import AgentLoop
 from myagent.agent.runtime import AgentRuntimeConfig
@@ -35,7 +36,8 @@ from myagent.config.settings import (
     Settings,
     SQLiteSettings,
 )
-from myagent.memory.base import BaseMemory, MemoryRecord
+from myagent.memory.base import BaseMemory
+from myagent.memory.types import MemoryHit, MemoryRecord
 from myagent.models.base import BaseModel, LLMResponse
 from myagent.models.openai_compat import OpenAICompatModel
 from myagent.rag.embedder import BaseEmbedder
@@ -109,16 +111,33 @@ class DictMemory:
         self.records.append(record)
         return record
 
-    def search(self, query: str, *, kind: str | None = None, top_k: int = 5) -> list[MemoryRecord]:
+    def add_many(self, records) -> list[MemoryRecord]:
+        return [self.add(record) for record in records]
+
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        return next((record for record in self.records if record.id == memory_id), None)
+
+    def search(self, query: str, *, kind: str | None = None, top_k: int = 5) -> list[MemoryHit]:
         hits = [
-            record
+            MemoryHit(record=record, score=1.0, reason="keyword")
             for record in self.records
             if query in record.text and (kind is None or record.kind == kind)
         ]
         return hits[:top_k]
 
-    def all(self) -> list[MemoryRecord]:
-        return list(self.records)
+    def all(self, *, kind: str | None = None, limit: int | None = None) -> list[MemoryRecord]:
+        matching = [record for record in self.records if kind is None or record.kind == kind]
+        return matching if limit is None else matching[:limit]
+
+    def count(self, *, kind: str | None = None) -> int:
+        return len(self.all(kind=kind))
+
+    def forget(self, memory_id: str) -> bool:
+        record = self.get(memory_id)
+        if record is None:
+            return False
+        self.records.remove(record)
+        return True
 
     def clear(self) -> None:
         self.records.clear()
@@ -261,6 +280,8 @@ def test_the_six_extension_points_are_structural_types():
 def test_the_two_loop_contracts_are_structural_types():
     assert isinstance(CountingContextManager(), ContextManager)
     assert isinstance(MemorySessionStore(), SessionStore)
+    # The Phase 4 port: the loop asks for memories, it does not know the layers.
+    assert isinstance(NullMemory(), MemoryProvider)
 
 
 def test_a_structural_implementation_does_not_inherit_anything():
@@ -302,6 +323,22 @@ async def test_the_fake_retriever_uses_the_fake_vector_store():
 # --------------------------------------------------------------------------
 
 
+async def test_a_memory_provider_that_fails_costs_context_but_not_the_turn():
+    """The loop treats memory as an enhancement, never as a dependency."""
+    loop = build_agent(
+        _settings(),
+        model=ScriptedModel(LLMResponse(content="answered anyway")),
+        tools=ToolRegistry(),
+        context=CountingContextManager(),
+        sessions=MemorySessionStore(),
+        memory=BrokenMemory(),
+    )
+
+    answer = await loop.run_once("hello", "cli:test")
+
+    assert answer == "answered anyway"
+
+
 async def test_the_runner_drives_a_tool_that_never_inherited_anything():
     registry = ToolRegistry()
     registry.register(DuckTool())
@@ -311,6 +348,7 @@ async def test_the_runner_drives_a_tool_that_never_inherited_anything():
         tools=registry,
         context=CountingContextManager(),
         sessions=MemorySessionStore(),
+        memory=NullMemory(),
     )
 
     answer = await loop.run_once("hello", "cli:test")
@@ -329,6 +367,7 @@ async def test_a_new_tool_needs_only_registry_register():
         tools=registry,
         context=CountingContextManager(),
         sessions=MemorySessionStore(),
+        memory=NullMemory(),
     )
 
     await loop.run_once("hello", "cli:test")
@@ -348,6 +387,7 @@ async def test_the_loop_runs_end_to_end_with_only_fakes(tmp_path):
         context=context,
         sessions=sessions,
         runtime=AgentRuntimeConfig(max_iterations=3),
+        memory=NullMemory(),
     )
 
     answer = await loop.run_once("hello", "cli:test")
@@ -366,6 +406,7 @@ def test_the_assembly_point_accepts_overrides_for_every_component(tmp_path):
     context = CountingContextManager()
     sessions = MemorySessionStore()
     runtime = AgentRuntimeConfig(max_iterations=1)
+    memory = NullMemory()
 
     loop = build_agent(
         _settings(tmp_path),
@@ -374,6 +415,7 @@ def test_the_assembly_point_accepts_overrides_for_every_component(tmp_path):
         context=context,
         sessions=sessions,
         runtime=runtime,
+        memory=memory,
     )
 
     assert isinstance(loop, AgentLoop)
@@ -382,6 +424,7 @@ def test_the_assembly_point_accepts_overrides_for_every_component(tmp_path):
     assert loop.context is context
     assert loop.sessions is sessions
     assert loop.runtime is runtime
+    assert loop.memory is memory
 
 
 def test_switching_provider_only_needs_settings(tmp_path):

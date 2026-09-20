@@ -21,15 +21,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from uuid import uuid4
 
 from myagent.agent.context import (
     ContextBudgetExceeded,
     ContextBundle,
+    ContextItem,
     ContextManager,
     ContextRequest,
+    MemoryProvider,
 )
 from myagent.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from myagent.agent.runtime import AgentRuntimeConfig
@@ -126,6 +128,7 @@ class AgentLoop:
         sessions: SessionStore,
         runtime: AgentRuntimeConfig,
         bus: MessageBus | None = None,
+        memory: MemoryProvider | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
@@ -133,6 +136,7 @@ class AgentLoop:
         self.sessions = sessions
         self.runtime = runtime
         self.bus = bus if bus is not None else MessageBus()
+        self.memory = memory
         self.runner = AgentRunner()
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -165,6 +169,7 @@ class AgentLoop:
         request = ContextRequest(
             user_input=ctx.user_input,
             history=session.transcript(),
+            memories=await self._recall_memories(ctx),
             tools=self.tools.get_definitions(),
             session_key=ctx.session_key,
             budget_tokens=self.runtime.context_budget_tokens,
@@ -214,6 +219,35 @@ class AgentLoop:
             *result.messages[len(bundle.messages) :],
         ]
         self.sessions.append(ctx.session_key, produced)
+        await self._observe_turn(ctx, produced)
+
+    async def _recall_memories(self, ctx: TurnContext) -> list[ContextItem]:
+        """Ask memory for this turn's context (PLAN 4.7).
+
+        Memory is an enhancement, never a dependency: a provider that raises is
+        logged and treated as "nothing recalled", so a Qdrant outage costs
+        context quality instead of the turn.
+        """
+        if self.memory is None:
+            return []
+        try:
+            return list(await self.memory.recall(ctx.user_input, session_key=ctx.session_key))
+        except Exception as exc:
+            logger.warning("[turn %s] memory recall failed: %s", ctx.turn_id, exc)
+            return []
+
+    async def _observe_turn(self, ctx: TurnContext, produced: Sequence[Message]) -> None:
+        """Hand the finished turn to memory (PLAN 4.3: after the ``save`` stage).
+
+        Same rule as recall: extraction is best effort, and a failure is logged
+        rather than surfaced — the user asked a question, not for a memory write.
+        """
+        if self.memory is None:
+            return
+        try:
+            await self.memory.observe(ctx.session_key, produced)
+        except Exception as exc:
+            logger.warning("[turn %s] memory write failed: %s", ctx.turn_id, exc)
 
     async def _prepare_outbound(self, ctx: TurnContext) -> None:
         """Turn the run result into the text the channel receives."""

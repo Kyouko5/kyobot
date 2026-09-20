@@ -15,9 +15,9 @@ from myagent.tokens import estimate_tokens
         ("abcde", 2),
         ("你好", 2),
         # Fullwidth punctuation and letters are CJK: one token each.
-        ("你好，世界", 5),  # noqa: RUF001 - the fullwidth comma is the point
+        ("你好，世界", 5),
         ("hello 你好", 4),
-        ("ＡＢ", 2),  # noqa: RUF001 - fullwidth forms are counted as CJK
+        ("ＡＢ", 2),
     ],
 )
 def test_estimate_tokens(text, expected):

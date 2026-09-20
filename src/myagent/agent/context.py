@@ -41,6 +41,7 @@ __all__ = [
     "ContextManager",
     "ContextRequest",
     "ContextSection",
+    "MemoryProvider",
     "SectionedContextManager",
 ]
 
@@ -83,6 +84,30 @@ class ContextItem:
     text: str
     reference: str | None = None
     score: float | None = None
+
+
+@runtime_checkable
+class MemoryProvider(Protocol):
+    """The port the loop uses to reach the memory system (PLAN 4.2–4.4).
+
+    Phase 4 implements it (`MemoryManager`); the loop only knows this shape,
+    because ``agent`` must not import ``myagent.memory`` — the same boundary that
+    makes :class:`ContextItem` a neutral type and lets Phase 6 change the memory
+    internals without touching the loop.
+
+    ``recall`` returns context items for the prompt; ``observe`` hands over the
+    messages of a finished turn so memory can decide what to keep. Both are
+    allowed to be no-ops (a disabled memory returns nothing) and the loop treats
+    either one failing as "no memory this turn", never as a failed turn.
+    """
+
+    async def recall(self, query: str, *, session_key: str) -> Sequence[ContextItem]:
+        """Return the memories worth putting in front of the model."""
+        ...
+
+    async def observe(self, session_key: str, messages: Sequence[Message]) -> None:
+        """Look at one finished turn and store whatever is worth remembering."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

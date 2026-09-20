@@ -18,7 +18,7 @@ form, project-level switches use the ``MYAGENT_*`` prefix.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -28,11 +28,17 @@ ENV_SQLITE_PATH: Final = "MYAGENT_SQLITE_PATH"
 ENV_QDRANT_URL: Final = "MYAGENT_QDRANT_URL"
 ENV_QDRANT_API_KEY: Final = "MYAGENT_QDRANT_API_KEY"
 ENV_QDRANT_COLLECTION: Final = "MYAGENT_QDRANT_COLLECTION"
+ENV_QDRANT_MEMORY_COLLECTION: Final = "MYAGENT_QDRANT_MEMORY_COLLECTION"
 ENV_QDRANT_PREFER_GRPC: Final = "MYAGENT_QDRANT_PREFER_GRPC"
 
 DEFAULT_SQLITE_PATH: Final = Path("data/myagent.db")
 DEFAULT_QDRANT_URL: Final = "http://localhost:6333"
 DEFAULT_QDRANT_COLLECTION: Final = "myagent_documents"
+# ADR-0008: memory vectors live in their own collection. Memory and documents
+# have different lifecycles (a memory can be forgotten by id, a document is
+# re-ingested or deleted whole), so sharing one collection would let a document
+# cleanup delete memory points.
+DEFAULT_QDRANT_MEMORY_COLLECTION: Final = "myagent_memories"
 
 _COLLECTION_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -92,6 +98,26 @@ DEFAULT_AGENT_MAX_TOOL_RESULT_CHARS: Final = 8_000
 DEFAULT_AGENT_WORKSPACE: Final = Path("workspace")
 DEFAULT_AGENT_SESSIONS_DIR: Final = Path("data/sessions")
 
+# --- Phase 4: layered memory -------------------------------------------------
+
+ENV_MEMORY_ENABLED: Final = "MYAGENT_MEMORY_ENABLED"
+ENV_MEMORY_HALF_LIFE_DAYS: Final = "MYAGENT_MEMORY_HALF_LIFE_DAYS"
+ENV_MEMORY_TOP_K: Final = "MYAGENT_MEMORY_TOP_K"
+ENV_MEMORY_MAX_TEXT_CHARS: Final = "MYAGENT_MEMORY_MAX_TEXT_CHARS"
+ENV_MEMORY_MAX_RECORDS_PER_TURN: Final = "MYAGENT_MEMORY_MAX_RECORDS_PER_TURN"
+
+DEFAULT_MEMORY_ENABLED: Final = True
+DEFAULT_MEMORY_HALF_LIFE_DAYS: Final = 30.0
+DEFAULT_MEMORY_TOP_K: Final = 5
+DEFAULT_MEMORY_MAX_TEXT_CHARS: Final = 500
+DEFAULT_MEMORY_MAX_RECORDS_PER_TURN: Final = 3
+# Must stay equal to ``myagent.memory.types.DEFAULT_IMPORTANCE``: the extractor
+# drops anything below it (PLAN 4.6), and tests/test_settings.py pins that.
+DEFAULT_MEMORY_MIN_IMPORTANCE: Final = 0.5
+DEFAULT_MEMORY_DEDUP_THRESHOLD: Final = 0.95
+DEFAULT_MEMORY_DEDUP_RECENT: Final = 8
+DEFAULT_MEMORY_SHORT_QUERY_CHARS: Final = 8
+
 
 @dataclass(frozen=True, slots=True)
 class SQLiteSettings:
@@ -109,18 +135,32 @@ class SQLiteSettings:
 
 @dataclass(frozen=True, slots=True)
 class QdrantSettings:
-    """How to reach the Qdrant instance holding the vector indexes."""
+    """How to reach the Qdrant instance holding the vector indexes.
+
+    Two collections, one client: ``collection`` holds document chunks (Phase 5)
+    and ``memory_collection`` holds memory records (Phase 4, ADR-0008).
+    """
 
     url: str = DEFAULT_QDRANT_URL
     collection: str = DEFAULT_QDRANT_COLLECTION
+    memory_collection: str = DEFAULT_QDRANT_MEMORY_COLLECTION
     api_key: str | None = None
     prefer_grpc: bool = False
 
     def __post_init__(self) -> None:
         if not self.url.startswith(("http://", "https://")):
             raise ValueError(f"Qdrant url must start with http:// or https://, got {self.url!r}")
-        if not _COLLECTION_PATTERN.match(self.collection):
-            raise ValueError(f"invalid Qdrant collection name: {self.collection!r}")
+        for name, value in (
+            ("collection", self.collection),
+            ("memory_collection", self.memory_collection),
+        ):
+            if not _COLLECTION_PATTERN.match(value):
+                raise ValueError(f"invalid Qdrant {name} name: {value!r}")
+        if self.collection == self.memory_collection:
+            raise ValueError(
+                "Qdrant document and memory collections must differ "
+                f"(both are {self.collection!r}); see ADR-0008"
+            )
 
     @classmethod
     def from_env(cls) -> QdrantSettings:
@@ -134,6 +174,10 @@ class QdrantSettings:
             url=get_env(ENV_QDRANT_URL, DEFAULT_QDRANT_URL) or DEFAULT_QDRANT_URL,
             collection=get_env(ENV_QDRANT_COLLECTION, DEFAULT_QDRANT_COLLECTION)
             or DEFAULT_QDRANT_COLLECTION,
+            memory_collection=get_env(
+                ENV_QDRANT_MEMORY_COLLECTION, DEFAULT_QDRANT_MEMORY_COLLECTION
+            )
+            or DEFAULT_QDRANT_MEMORY_COLLECTION,
             api_key=get_env(ENV_QDRANT_API_KEY),
             prefer_grpc=get_bool_env(ENV_QDRANT_PREFER_GRPC),
         )
@@ -203,6 +247,80 @@ class EmbeddingSettings:
         if self.api_key:
             return self.api_key
         raise MissingEnvError(ENV_EMBED_API_KEY)
+
+
+@dataclass(frozen=True, slots=True)
+class MemorySettings:
+    """How the layered memory behaves (PLAN 4.0–4.7).
+
+    ``enabled`` is the Phase 8 switch: with ``MYAGENT_MEMORY_ENABLED=false`` the
+    loop still runs, it simply neither recalls nor writes. The rest are the
+    write policy of PLAN 4.6 (importance floor, per-turn caps), the decay law of
+    PLAN 4.3 and the retrieval knobs of PLAN 4.7.
+    """
+
+    enabled: bool = DEFAULT_MEMORY_ENABLED
+    half_life_days: float = DEFAULT_MEMORY_HALF_LIFE_DAYS
+    top_k: int = DEFAULT_MEMORY_TOP_K
+    max_text_chars: int = DEFAULT_MEMORY_MAX_TEXT_CHARS
+    max_records_per_turn: int = DEFAULT_MEMORY_MAX_RECORDS_PER_TURN
+    min_importance: float = DEFAULT_MEMORY_MIN_IMPORTANCE
+    dedup_threshold: float = DEFAULT_MEMORY_DEDUP_THRESHOLD
+    dedup_recent: int = DEFAULT_MEMORY_DEDUP_RECENT
+    short_query_chars: int = DEFAULT_MEMORY_SHORT_QUERY_CHARS
+
+    def __post_init__(self) -> None:
+        if self.half_life_days <= 0:
+            raise ValueError(
+                f"{ENV_MEMORY_HALF_LIFE_DAYS} must be positive, got {self.half_life_days}"
+            )
+        if self.top_k <= 0:
+            raise ValueError(f"{ENV_MEMORY_TOP_K} must be positive, got {self.top_k}")
+        if self.max_text_chars <= 0:
+            raise ValueError(
+                f"{ENV_MEMORY_MAX_TEXT_CHARS} must be positive, got {self.max_text_chars}"
+            )
+        if self.max_records_per_turn <= 0:
+            raise ValueError(
+                f"{ENV_MEMORY_MAX_RECORDS_PER_TURN} must be positive, "
+                f"got {self.max_records_per_turn}"
+            )
+        if not 0.0 <= self.min_importance <= 1.0:
+            raise ValueError(f"min_importance must be within 0..1, got {self.min_importance}")
+        if not 0.0 <= self.dedup_threshold <= 1.0:
+            raise ValueError(f"dedup_threshold must be within 0..1, got {self.dedup_threshold}")
+        if self.dedup_recent < 0:
+            raise ValueError(f"dedup_recent must not be negative, got {self.dedup_recent}")
+        if self.short_query_chars < 0:
+            raise ValueError(
+                f"short_query_chars must not be negative, got {self.short_query_chars}"
+            )
+
+    @classmethod
+    def from_env(cls) -> MemorySettings:
+        """Build settings from the environment, loading ``.env`` first."""
+        load_env()
+        return cls(
+            enabled=get_bool_env(ENV_MEMORY_ENABLED, DEFAULT_MEMORY_ENABLED),
+            half_life_days=_parse_positive_float(
+                ENV_MEMORY_HALF_LIFE_DAYS,
+                get_env(ENV_MEMORY_HALF_LIFE_DAYS),
+                DEFAULT_MEMORY_HALF_LIFE_DAYS,
+            ),
+            top_k=_parse_positive_int(
+                ENV_MEMORY_TOP_K, get_env(ENV_MEMORY_TOP_K), DEFAULT_MEMORY_TOP_K
+            ),
+            max_text_chars=_parse_positive_int(
+                ENV_MEMORY_MAX_TEXT_CHARS,
+                get_env(ENV_MEMORY_MAX_TEXT_CHARS),
+                DEFAULT_MEMORY_MAX_TEXT_CHARS,
+            ),
+            max_records_per_turn=_parse_positive_int(
+                ENV_MEMORY_MAX_RECORDS_PER_TURN,
+                get_env(ENV_MEMORY_MAX_RECORDS_PER_TURN),
+                DEFAULT_MEMORY_MAX_RECORDS_PER_TURN,
+            ),
+        )
 
 
 def _parse_dim(raw: str | None) -> int | None:
@@ -399,6 +517,7 @@ class Settings:
     sqlite: SQLiteSettings
     qdrant: QdrantSettings
     embedding: EmbeddingSettings
+    memory: MemorySettings = field(default_factory=MemorySettings)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -409,4 +528,5 @@ class Settings:
             sqlite=SQLiteSettings.from_env(),
             qdrant=QdrantSettings.from_env(),
             embedding=EmbeddingSettings.from_env(),
+            memory=MemorySettings.from_env(),
         )

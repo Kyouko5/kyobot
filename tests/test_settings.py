@@ -20,12 +20,19 @@ from myagent.config.settings import (
     DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_MEMORY_ENABLED,
+    DEFAULT_MEMORY_HALF_LIFE_DAYS,
+    DEFAULT_MEMORY_MAX_RECORDS_PER_TURN,
+    DEFAULT_MEMORY_MAX_TEXT_CHARS,
+    DEFAULT_MEMORY_TOP_K,
     DEFAULT_QDRANT_COLLECTION,
+    DEFAULT_QDRANT_MEMORY_COLLECTION,
     DEFAULT_QDRANT_URL,
     DEFAULT_SQLITE_PATH,
     AgentSettings,
     EmbeddingSettings,
     LLMSettings,
+    MemorySettings,
     QdrantSettings,
     Settings,
     SQLiteSettings,
@@ -146,6 +153,7 @@ def test_settings_read_the_env_file(isolated_environ, tmp_path):
                 "MYAGENT_QDRANT_URL=https://qdrant.example.com:6333",
                 "MYAGENT_QDRANT_API_KEY=qdrant-secret",
                 "MYAGENT_QDRANT_COLLECTION=papers",
+                "MYAGENT_QDRANT_MEMORY_COLLECTION=papers_memories",
                 "MYAGENT_QDRANT_PREFER_GRPC=yes",
             ]
         )
@@ -161,6 +169,7 @@ def test_settings_read_the_env_file(isolated_environ, tmp_path):
     assert qdrant.url == "https://qdrant.example.com:6333"
     assert qdrant.api_key == "qdrant-secret"
     assert qdrant.collection == "papers"
+    assert qdrant.memory_collection == "papers_memories"
     assert qdrant.prefer_grpc is True
 
 
@@ -173,12 +182,14 @@ def test_sqlite_path_expands_the_user_directory(isolated_environ):
 def test_blank_qdrant_values_fall_back_to_defaults(isolated_environ):
     isolated_environ["MYAGENT_QDRANT_URL"] = ""
     isolated_environ["MYAGENT_QDRANT_COLLECTION"] = ""
+    isolated_environ["MYAGENT_QDRANT_MEMORY_COLLECTION"] = ""
     isolated_environ["MYAGENT_QDRANT_API_KEY"] = ""
 
     qdrant = QdrantSettings.from_env()
 
     assert qdrant.url == DEFAULT_QDRANT_URL
     assert qdrant.collection == DEFAULT_QDRANT_COLLECTION
+    assert qdrant.memory_collection == DEFAULT_QDRANT_MEMORY_COLLECTION
     assert qdrant.api_key is None
 
 
@@ -200,6 +211,18 @@ def test_qdrant_url_must_be_http(url):
 def test_qdrant_collection_name_is_validated(collection):
     with pytest.raises(ValueError, match="invalid Qdrant collection name"):
         QdrantSettings(collection=collection)
+
+
+@pytest.mark.parametrize("collection", ["", " with space"])
+def test_qdrant_memory_collection_name_is_validated(collection):
+    with pytest.raises(ValueError, match="invalid Qdrant memory_collection name"):
+        QdrantSettings(memory_collection=collection)
+
+
+def test_the_two_qdrant_collections_must_differ():
+    """ADR-0008: memories and documents must not share an index."""
+    with pytest.raises(ValueError, match="must differ"):
+        QdrantSettings(collection="same", memory_collection="same")
 
 
 def test_llm_defaults_need_no_configuration():
@@ -365,3 +388,88 @@ def test_settings_from_env_bundles_every_section(isolated_environ):
     assert settings.sqlite.path == Path("/tmp/myagent.db")
     assert isinstance(settings.qdrant, QdrantSettings)
     assert isinstance(settings.embedding, EmbeddingSettings)
+    assert isinstance(settings.memory, MemorySettings)
+
+
+# --------------------------------------------------------------------------
+# Phase 4: the memory settings
+# --------------------------------------------------------------------------
+
+
+def test_memory_defaults_need_no_configuration():
+    memory = MemorySettings.from_env()
+
+    assert memory.enabled is DEFAULT_MEMORY_ENABLED
+    assert memory.half_life_days == DEFAULT_MEMORY_HALF_LIFE_DAYS
+    assert memory.top_k == DEFAULT_MEMORY_TOP_K
+    assert memory.max_text_chars == DEFAULT_MEMORY_MAX_TEXT_CHARS
+    assert memory.max_records_per_turn == DEFAULT_MEMORY_MAX_RECORDS_PER_TURN
+
+
+def test_memory_defaults_agree_with_the_write_policy():
+    """``MemorySettings.min_importance`` and the record default must not drift."""
+    from myagent.memory.types import DEFAULT_IMPORTANCE
+
+    assert MemorySettings().min_importance == DEFAULT_IMPORTANCE
+
+
+def test_memory_reads_the_env_file(isolated_environ, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "MYAGENT_MEMORY_ENABLED=off",
+                "MYAGENT_MEMORY_HALF_LIFE_DAYS=7",
+                "MYAGENT_MEMORY_TOP_K=3",
+                "MYAGENT_MEMORY_MAX_TEXT_CHARS=120",
+                "MYAGENT_MEMORY_MAX_RECORDS_PER_TURN=1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    isolated_environ["MYAGENT_ENV_FILE"] = str(env_file)
+
+    memory = MemorySettings.from_env()
+
+    assert memory.enabled is False
+    assert memory.half_life_days == 7.0
+    assert memory.top_k == 3
+    assert memory.max_text_chars == 120
+    assert memory.max_records_per_turn == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("MYAGENT_MEMORY_HALF_LIFE_DAYS", "0", "must be positive"),
+        ("MYAGENT_MEMORY_HALF_LIFE_DAYS", "soon", "must be a number"),
+        ("MYAGENT_MEMORY_TOP_K", "0", "must be positive"),
+        ("MYAGENT_MEMORY_MAX_TEXT_CHARS", "many", "must be an integer"),
+        ("MYAGENT_MEMORY_MAX_RECORDS_PER_TURN", "-1", "must be positive"),
+        ("MYAGENT_MEMORY_ENABLED", "maybe", "must be a boolean"),
+    ],
+)
+def test_memory_numbers_are_parsed_from_the_environment(isolated_environ, name, value, message):
+    isolated_environ[name] = value
+
+    with pytest.raises(ValueError, match=message):
+        MemorySettings.from_env()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"half_life_days": 0}, "MYAGENT_MEMORY_HALF_LIFE_DAYS must be positive"),
+        ({"top_k": 0}, "MYAGENT_MEMORY_TOP_K must be positive"),
+        ({"max_text_chars": 0}, "MYAGENT_MEMORY_MAX_TEXT_CHARS must be positive"),
+        ({"max_records_per_turn": 0}, "MYAGENT_MEMORY_MAX_RECORDS_PER_TURN must be positive"),
+        ({"min_importance": 1.5}, "min_importance must be within 0..1"),
+        ({"dedup_threshold": -0.1}, "dedup_threshold must be within 0..1"),
+        ({"dedup_recent": -1}, "dedup_recent must not be negative"),
+        ({"short_query_chars": -1}, "short_query_chars must not be negative"),
+    ],
+)
+def test_memory_settings_are_validated(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        MemorySettings(**kwargs)

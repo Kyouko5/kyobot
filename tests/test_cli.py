@@ -169,3 +169,187 @@ def test_build_agent_can_take_a_bus():
     bus: Any = MessageBus()
 
     assert build_agent(bus=bus).bus is bus
+
+
+# --------------------------------------------------------------------------
+# Phase 4: `myagent memory ...` (PLAN 4.9)
+# --------------------------------------------------------------------------
+
+
+def memory_manager(tmp_path):
+    """A real ``MemoryManager`` over SQLite + the offline doubles."""
+    from fakes import BagOfWordsEmbedder, DictionaryIndex
+    from myagent.config.settings import MemorySettings, SQLiteSettings
+    from myagent.memory.manager import MemoryManager
+    from myagent.memory.sqlite_store import SQLiteMemoryStore
+    from myagent.session.manager import JsonlSessionStore
+
+    return MemoryManager(
+        SQLiteMemoryStore(SQLiteSettings(path=tmp_path / "memory.db")),
+        DictionaryIndex(),
+        BagOfWordsEmbedder(),
+        collection="myagent_memories",
+        embedding_model="fake-embed",
+        sessions=JsonlSessionStore(tmp_path / "sessions"),
+        settings=MemorySettings(),
+    )
+
+
+@pytest.fixture
+def cli_memory(monkeypatch, tmp_path, isolated_env):
+    """Point the CLI at a throwaway memory system."""
+    manager = memory_manager(tmp_path)
+    monkeypatch.setattr(cli, "build_memory", lambda *args, **kwargs: manager)
+    return manager
+
+
+def seed(manager, *texts: str, kind: str = "semantic", importance: float = 0.8):
+    import asyncio
+
+    records = [
+        (manager.semantic if kind == "semantic" else manager.episodic).build(
+            text, importance=importance, source="manual"
+        )
+        for text in texts
+    ]
+    return asyncio.run(manager.write(records))
+
+
+def test_memory_list_reports_an_empty_store(capsys, cli_memory):
+    assert cli.main(["memory", "list"]) == 0
+
+    assert capsys.readouterr().out.strip() == "no memories yet"
+
+
+def test_memory_list_prints_the_records(capsys, cli_memory):
+    seed(cli_memory, "用户偏好 Python", "用户在研究 GraphRAG")
+
+    assert cli.main(["memory", "list", "--kind", "semantic", "-n", "1"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("semantic") == 1
+    assert "importance=0.80" in out
+    assert "(1 shown, 2 stored)" in out
+
+
+def test_memory_search_prints_hits_with_their_score(capsys, cli_memory):
+    seed(cli_memory, "用户在研究 GraphRAG")
+
+    assert cli.main(["memory", "search", "用户在研究 GraphRAG", "-k", "3"]) == 0
+
+    out = capsys.readouterr().out
+    assert "score=" in out
+    assert "via=vector" in out
+
+
+def test_memory_search_says_so_when_nothing_matches(capsys, cli_memory):
+    assert cli.main(["memory", "search", "nothing like this"]) == 0
+
+    assert "no memory matched" in capsys.readouterr().out
+
+
+def test_memory_search_reports_a_dead_vector_index_instead_of_a_traceback(capsys, cli_memory):
+    """PLAN 4.9: a stopped Qdrant produces a readable note, not a stack trace."""
+    from myagent.memory.vector_index import MemoryIndexError
+
+    seed(cli_memory, "用户在研究 GraphRAG")
+    cli_memory._index.fail_with = MemoryIndexError("Qdrant at http://localhost:6333 is unreachable")
+    cli_memory.retriever._index.fail_with = cli_memory._index.fail_with
+
+    assert cli.main(["memory", "search", "GraphRAG"]) == 0
+
+    captured = capsys.readouterr()
+    assert "via=keyword" in captured.out
+    assert "vector search unavailable" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_memory_add_stores_a_hand_written_memory(capsys, cli_memory):
+    assert cli.main(["memory", "add", "用户偏好 Python", "--importance", "0.9"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("stored semantic memory ")
+    record = cli_memory.all()[0]
+    assert record.text == "用户偏好 Python"
+    assert record.importance == 0.9
+    assert record.source == "manual"
+
+
+def test_memory_add_can_write_an_episodic_memory(capsys, cli_memory):
+    assert cli.main(["memory", "add", "读了论文 A", "--kind", "episodic"]) == 0
+
+    assert cli_memory.all()[0].kind == "episodic"
+
+
+def test_memory_add_rejects_an_impossible_importance(capsys, cli_memory):
+    assert cli.main(["memory", "add", "x", "--importance", "2"]) == 2
+
+    assert "must be within 0..1" in capsys.readouterr().err
+    assert cli_memory.count() == 0
+
+
+def test_memory_add_explains_a_disabled_memory(capsys, cli_memory, monkeypatch):
+    from myagent.config.settings import MemorySettings
+
+    cli_memory._settings = MemorySettings(enabled=False)
+
+    assert cli.main(["memory", "add", "用户偏好 Python"]) == 1
+
+    assert "memory is disabled" in capsys.readouterr().err
+
+
+def test_memory_add_reports_a_write_that_stored_nothing(capsys, cli_memory, monkeypatch):
+    """The CLI must not claim to have stored something that is not there."""
+
+    async def store_nothing(records):
+        return []
+
+    monkeypatch.setattr(cli_memory, "write", store_nothing)
+
+    assert cli.main(["memory", "add", "用户偏好 Python"]) == 1
+    assert "was not stored" in capsys.readouterr().err
+
+
+def test_memory_consolidate_dry_run_and_real(capsys, cli_memory):
+    seed(cli_memory, "读了论文 A。", kind="episodic", importance=0.6)
+
+    assert cli.main(["memory", "consolidate", "--dry-run"]) == 0
+    assert "would consolidate 1 episodic memory(ies)" in capsys.readouterr().out
+    assert cli_memory.count(kind="semantic") == 0
+
+    assert cli.main(["memory", "consolidate"]) == 0
+    assert "consolidated 1 episodic memory(ies)" in capsys.readouterr().out
+    assert cli_memory.count(kind="semantic") == 1
+
+
+def test_memory_consolidate_with_nothing_to_do(capsys, cli_memory):
+    assert cli.main(["memory", "consolidate"]) == 0
+
+    assert capsys.readouterr().out.strip() == "nothing to consolidate"
+
+
+def test_memory_forget_deletes_and_reports(capsys, cli_memory):
+    record = seed(cli_memory, "用户偏好 Python")[0]
+
+    assert cli.main(["memory", "forget", record.id]) == 0
+    assert f"forgot {record.id}" in capsys.readouterr().out
+    assert cli_memory.count() == 0
+
+    assert cli.main(["memory", "forget", record.id]) == 1
+    assert "no memory with id" in capsys.readouterr().err
+
+
+def test_memory_requires_a_verb(capsys):
+    with pytest.raises(SystemExit) as info:
+        cli.main(["memory"])
+
+    assert info.value.code == 2
+    assert "the following arguments are required: memory_command" in capsys.readouterr().err
+
+
+def test_memory_rejects_an_unknown_kind(capsys):
+    with pytest.raises(SystemExit) as info:
+        cli.main(["memory", "list", "--kind", "dream"])
+
+    assert info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

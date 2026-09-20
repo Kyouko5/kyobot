@@ -17,10 +17,14 @@ per-turn limits (``AgentRuntimeConfig``), this one wires the objects together.
 
 from __future__ import annotations
 
-from myagent.agent.context import ContextManager, SectionedContextManager
+from myagent.agent.context import ContextManager, MemoryProvider, SectionedContextManager
 from myagent.agent.loop import AgentLoop, MessageBus
 from myagent.agent.runtime import AgentRuntimeConfig
 from myagent.config.settings import Settings
+from myagent.memory.embedder import OpenAICompatEmbedder
+from myagent.memory.manager import MemoryManager
+from myagent.memory.sqlite_store import SQLiteMemoryStore
+from myagent.memory.vector_index import QdrantMemoryIndex
 from myagent.models.base import BaseModel
 from myagent.models.openai_compat import OpenAICompatModel
 from myagent.session.base import SessionStore
@@ -28,7 +32,7 @@ from myagent.session.manager import JsonlSessionStore
 from myagent.tools.builtin import build_default_registry
 from myagent.tools.registry import ToolRegistry
 
-__all__ = ["build_agent"]
+__all__ = ["build_agent", "build_memory"]
 
 
 def build_agent(
@@ -40,26 +44,68 @@ def build_agent(
     sessions: SessionStore | None = None,
     runtime: AgentRuntimeConfig | None = None,
     bus: MessageBus | None = None,
+    memory: MemoryProvider | None = None,
 ) -> AgentLoop:
     """Assemble the agent runtime.
 
     ``settings`` defaults to :meth:`Settings.from_env` and is the only thing the
     defaults are built from. Every keyword argument overrides one component,
     which is how tests inject fakes and how a caller swaps a single part later
-    (Phase 4/5/6) without editing the assembly.
+    (Phase 5/6) without editing the assembly.
+
+    ``memory`` is the Phase 4 addition: the default is :func:`build_memory`, and
+    the extractor shares the loop's chat model (one provider, one configuration).
+    Passing ``settings.memory=MemorySettings(enabled=False)`` keeps the wiring but
+    turns recall and automatic writes off — the switch the Phase 8 comparison
+    uses.
     """
     resolved = settings if settings is not None else Settings.from_env()
+    resolved_model = model if model is not None else OpenAICompatModel(resolved.llm)
+    resolved_sessions = (
+        sessions if sessions is not None else JsonlSessionStore.from_settings(resolved.agent)
+    )
     return AgentLoop(
-        model=model if model is not None else OpenAICompatModel(resolved.llm),
+        model=resolved_model,
         tools=tools if tools is not None else build_default_registry(resolved.agent),
         context=context
         if context is not None
         else SectionedContextManager(resolved.agent.workspace),
-        sessions=sessions
-        if sessions is not None
-        else JsonlSessionStore.from_settings(resolved.agent),
+        sessions=resolved_sessions,
         runtime=runtime
         if runtime is not None
         else AgentRuntimeConfig.from_settings(resolved.agent, resolved.llm),
         bus=bus,
+        memory=memory
+        if memory is not None
+        else build_memory(resolved, model=resolved_model, sessions=resolved_sessions),
+    )
+
+
+def build_memory(
+    settings: Settings,
+    *,
+    model: BaseModel | None = None,
+    sessions: SessionStore | None = None,
+) -> MemoryManager:
+    """Assemble the layered memory system (PLAN 4.0) from one :class:`Settings`.
+
+    Separate from :func:`build_agent` because ``myagent memory ...`` needs the
+    memory system *without* the agent loop. Both entry points read the same
+    settings, so the CLI and the agent can never disagree about which SQLite
+    file or which Qdrant collection memory uses (PLAN 4.5).
+
+    Nothing here touches the network: the Qdrant client, the embedding client
+    and the extraction prompt are all created on first use.
+    """
+    return MemoryManager(
+        SQLiteMemoryStore(settings.sqlite),
+        QdrantMemoryIndex(settings.qdrant),
+        OpenAICompatEmbedder(settings.embedding),
+        collection=settings.qdrant.memory_collection,
+        embedding_model=settings.embedding.model_name,
+        sessions=sessions
+        if sessions is not None
+        else JsonlSessionStore.from_settings(settings.agent),
+        model=model,
+        settings=settings.memory,
     )

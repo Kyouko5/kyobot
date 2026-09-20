@@ -1,87 +1,29 @@
-"""The memory contract: one record shape, one store interface.
+"""The memory store contract (PLAN 3.4, reshaped by PLAN 4.1).
 
-V1 ships the interface plus one trivial implementation so the shape is settled
-before Phase 4 builds working / episodic / semantic memory on top of it. Nothing
-in the loop calls memory yet: PLAN 4.x owns retrieval, writing policy and
-consolidation, and wiring a half-designed retriever into the context builder is
-exactly the coupling Phase 3 removes.
+Phase 3 defined ``BaseMemory`` as ``add`` / ``search`` / ``all`` / ``clear`` to
+pin the extension point down before the layered design existed. Phase 4 keeps
+that shape and adds the three things the layers actually need:
 
-Phase 3 changes the Phase 2 interface in two ways, both from PLAN 3.4's table:
+* ``search`` returns :class:`MemoryHit` (record + score + reason) instead of a
+  bare record, because the retriever must tell "0.91 cosine" from "keyword
+  match" when it merges and re-ranks (PLAN 4.7), and Phase 8 needs the score;
+* ``get`` / ``forget`` exist because a memory that cannot be deleted or looked
+  up by id cannot honour the "one fact, one record" rule of PLAN 4.1;
+* ``add_many`` lets one turn's candidates land in a single transaction.
 
-* ``add(record)`` instead of ``add(content)`` — the caller (Phase 4's
-  ``MemoryManager``) decides id, kind and importance, the store only persists;
-* ``search(query, kind=..., top_k=...)`` instead of ``search(query, limit=...)``
-  — the layered design searches per kind, and Phase 4 adds the scoring.
+A store knows nothing about embeddings or decay: it persists records and answers
+keyword questions. Vector search lives in :mod:`myagent.memory.vector_index`,
+scoring in :mod:`myagent.memory.retriever`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
-from uuid import uuid4
+from typing import Protocol, runtime_checkable
 
-__all__ = ["BaseMemory", "MemoryRecord"]
+from myagent.memory.types import Kind, MemoryHit, MemoryRecord
 
-# Phase 4 will narrow this to ``Literal["episodic", "semantic"]``; a plain str
-# keeps the V1 file store usable without freezing the taxonomy early.
-EPISODIC = "episodic"
-SEMANTIC = "semantic"
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryRecord:
-    """One durable fact or note."""
-
-    id: str
-    text: str
-    created_at: str
-    kind: str = EPISODIC
-    tags: tuple[str, ...] = ()
-    source: str | None = None
-
-    @classmethod
-    def create(
-        cls,
-        text: str,
-        *,
-        kind: str = EPISODIC,
-        tags: Sequence[str] = (),
-        source: str | None = None,
-    ) -> MemoryRecord:
-        """Build a record with a fresh id and timestamp."""
-        return cls(
-            id=uuid4().hex,
-            text=text,
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-            kind=kind,
-            tags=tuple(tags),
-            source=source,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize for the store (JSON-friendly)."""
-        return {
-            "id": self.id,
-            "text": self.text,
-            "created_at": self.created_at,
-            "kind": self.kind,
-            "tags": list(self.tags),
-            "source": self.source,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> MemoryRecord:
-        """Rebuild a record from its stored form (missing fields get defaults)."""
-        return cls(
-            id=str(data["id"]),
-            text=str(data["text"]),
-            created_at=str(data.get("created_at", "")),
-            kind=str(data.get("kind", EPISODIC)),
-            tags=tuple(str(tag) for tag in data.get("tags") or ()),
-            source=data.get("source"),
-        )
+__all__ = ["BaseMemory"]
 
 
 @runtime_checkable
@@ -89,17 +31,33 @@ class BaseMemory(Protocol):
     """What the framework expects from any memory backend."""
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
-        """Persist one record and return it."""
+        """Persist one record and return it (the caller owns the record's id)."""
         ...
 
-    def search(self, query: str, *, kind: str | None = None, top_k: int = 5) -> list[MemoryRecord]:
-        """Return up to ``top_k`` records relevant to ``query``, best first."""
+    def add_many(self, records: Sequence[MemoryRecord]) -> list[MemoryRecord]:
+        """Persist a batch in one transaction; an empty batch is a no-op."""
         ...
 
-    def all(self) -> list[MemoryRecord]:
-        """Return every record, oldest first."""
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        """Return one record by id, or ``None`` when it is unknown."""
+        ...
+
+    def all(self, *, kind: Kind | None = None, limit: int | None = None) -> list[MemoryRecord]:
+        """Return records newest first, optionally filtered by kind."""
+        ...
+
+    def count(self, *, kind: Kind | None = None) -> int:
+        """How many records are stored (optionally of one kind)."""
+        ...
+
+    def search(self, query: str, *, kind: Kind | None = None, top_k: int = 5) -> list[MemoryHit]:
+        """Keyword search: up to ``top_k`` records that share terms with ``query``."""
+        ...
+
+    def forget(self, memory_id: str) -> bool:
+        """Delete one record (and its vectors); ``False`` when it was unknown."""
         ...
 
     def clear(self) -> None:
-        """Delete every record (used by tests and the Phase 4 CLI)."""
+        """Delete every record (tests and ``myagent memory`` maintenance)."""
         ...
