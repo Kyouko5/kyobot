@@ -151,7 +151,7 @@ kyobot/
 - [`docs/records/phase-4-memory.md`](./docs/records/phase-4-memory.md)：Phase 4 工作记录（五张实验表、跨 Session 验收、质量门，以及 Qdrant id 归一化等四个真实问题）。
 
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 863 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 865 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 

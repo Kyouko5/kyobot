@@ -94,6 +94,8 @@ PYTHONPATH=src MYAGENT_SQLITE_PATH=/tmp/phase4-demo.db .venv/bin/python -m myage
 - Qdrant 走 `QdrantClient(path=...)` 的**嵌入式本地模式**（同样的 payload、过滤与余弦检索，
   不需要服务器），HTTP 传输与它的失败模式由 `tests/test_memory.py` 覆盖；
 - SQLite、Qdrant 目录、会话 JSONL 都在一个临时目录里，跑完即删。
+- 「LLM + 规则」一行会随**抽取 prompt 的措辞**波动（`src/myagent/memory/extractor.py:62`）：
+  下表记录的是当时那一版 prompt 的结果，改 prompt 之后应当重跑，规则一行是确定的。
 
 ## 6. 实验结果
 
@@ -168,7 +170,7 @@ $ scripts/check.sh
 == pytest ==                442 passed（覆盖率 2785 stmts / 662 branches，100%）
 
 $ .venv/bin/python scripts/check_doc_anchors.py
-checked 863 anchor(s) in 16 document(s)
+checked 865 anchor(s) in 16 document(s)
 all anchors resolve
 ```
 

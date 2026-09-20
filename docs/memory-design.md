@@ -194,9 +194,10 @@ memory_vectors(                    -- 向量落库状态：避免重复 embeddin
 
 - **闲聊只匹配整句**：「你好，我在研究 RAG」是事实，不会被 `_CHITCHAT` 吃掉，
   因为它要求整句只剩问候语与语气词（正则以 `$` 收尾）。
-- **上限写在代码里，不写在 prompt 里**：prompt 里也写了"under 200 characters / at most 3"，
-  但那只是提示；真正保证 500 字符/条、3 条/轮的是 `apply_policy` 与 `_split`
-  （这也是 PLAN 4.1 要求的「在写入层强制」）。
+- **上限写在代码里，不写在 prompt 里**：prompt（`src/myagent/memory/extractor.py:62`）里也写了
+  「Max 3 memories / concise」，并明确 `importance` 是「长期价值」而不是「置信度或相关度」——
+  但那只是提示；真正保证 500 字符/条、3 条/轮、`importance ≥ 0.5` 的是
+  `apply_policy` 与 `_split`（这也是 PLAN 4.1 要求的「在写入层强制」）。
 
 `parse_candidates`（`src/myagent/memory/extractor.py:358`）把模型输出解析成候选记录：容忍 markdown 代码块、
 字段缺失与类型错误，逐条校验，**坏的那条丢掉而不是整批丢掉**。
