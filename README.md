@@ -28,12 +28,23 @@
 ## 快速开始
 
 ```bash
-# 1. 创建虚拟环境并安装开发依赖（本机 Python 缺少 CA 证书包，脚本会处理）
+# 1. 配置密钥（.env 已被 git 忽略；模板列出了全部需要的 key）
+cp .env.example .env
+
+# 2. 创建虚拟环境并安装依赖（本机 Python 缺少 CA 证书包，脚本会处理）
 scripts/bootstrap.sh
 source .venv/bin/activate
 
-# 2. 质量门：ruff format --check / ruff check / mypy / pytest + coverage
+# 3. 质量门：ruff format --check / ruff check / mypy / pytest + coverage
 scripts/check.sh
+```
+
+密钥统一通过 `python-dotenv` 的 `load_dotenv()` 读取（`MYAGENT_ENV_FILE` 可指向别处的 `.env`）：
+
+```python
+from myagent.config import require_env
+
+api_key = require_env("LLM_API_KEY")  # 未填则抛 MissingEnvError，不会静默失败
 ```
 
 没有安装依赖时也可以直接跑测试（`pyproject.toml` 里配置了 `pythonpath = ["src"]`）：
@@ -49,6 +60,7 @@ kyobot/
 ├── PLAN.md                     # 项目计划与验收标准（唯一路线入口）
 ├── pyproject.toml              # 打包、ruff、mypy、pytest、coverage 配置
 ├── src/myagent/                # Framework 本体
+│   ├── config/                 # .env 加载、类型化设置（SQLite / Qdrant）
 │   └── observability/          # 日志等可观测性基础件
 ├── tests/                      # pytest 测试
 ├── docs/                       # 设计文档、ADR、阶段记录
@@ -57,8 +69,19 @@ kyobot/
 │   ├── decision-records/       # 架构决策记录（ADR）
 │   └── records/                # 阶段工作记录
 ├── scripts/                    # bootstrap.sh / check.sh
+├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 └── nanobot/                    # 上游只读参照，不参与构建（git ignored）
 ```
+
+## 技术选型
+
+| 层 | 选型 | 决策记录 |
+| --- | --- | --- |
+| 文档与元数据存储 | SQLite（`sqlite3`，单文件，可上 FTS5 做混合检索） | ADR-0003 |
+| 向量存储 | Qdrant（HNSW + payload 过滤，本地 docker / 云端同一套配置） | ADR-0003 |
+| Embedding | 阿里云 DashScope（`qwen3.7-text-embedding-flash`，OpenAI 兼容模式） | ADR-0005 |
+| 配置与密钥 | `.env` + `python-dotenv` 的 `load_dotenv()`，环境变量优先 | ADR-0004 |
+| Agent Runtime | 自研（对照 nanobot 的 Loop / Runner 拆分重新抽象） | ADR-0001、ADR-0002 |
 
 ## 文档索引
 
@@ -66,6 +89,9 @@ kyobot/
 - [`docs/development.md`](./docs/development.md)：Python / 测试 / Git / Logging / 文档规范。
 - [`docs/decision-records/0001-project-layout-and-tooling.md`](./docs/decision-records/0001-project-layout-and-tooling.md)：目录布局与工具链选型。
 - [`docs/decision-records/0002-nanobot-as-read-only-reference.md`](./docs/decision-records/0002-nanobot-as-read-only-reference.md)：为什么把 nanobot 当作只读参照而不是 fork。
+- [`docs/decision-records/0003-storage-and-vector-store.md`](./docs/decision-records/0003-storage-and-vector-store.md)：SQLite + Qdrant 的存储选型。
+- [`docs/decision-records/0004-secrets-and-env-files.md`](./docs/decision-records/0004-secrets-and-env-files.md)：密钥与环境变量的唯一读取路径。
+- [`docs/decision-records/0005-embedding-provider.md`](./docs/decision-records/0005-embedding-provider.md)：Embedding 提供方与模型。
 - [`docs/records/`](./docs/records)：每个阶段的工作记录（问题 → Baseline → 方案 → 实现 → 实验 → 结果 → 结论）。
 
 ## 上游致谢

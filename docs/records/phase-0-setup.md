@@ -111,3 +111,40 @@ pre-commit（9 个钩子，含 `mypy` local hook）在真实文件上全部 `Pas
 | 仓库里残留空的 `my-agent-framework/` 目录（未纳入 git） | 确认后删除（ADR-0001 已定根目录方案） |
 | 覆盖率下限、CI | Phase 9 设定（对齐上游 75%）并接入工作流 |
 | LICENSE 未定 | Phase 9/10 定稿打包时补 |
+
+## 9. 追加决策（2026-09-20）
+
+项目前期追加了三条技术决定，已落成 ADR 并落进代码（Phase 4/5 开工前不再变更）：
+
+| 决定 | 落地位置 | 验证 |
+| --- | --- | --- |
+| 文档与元数据存 **SQLite** | `SQLiteSettings`（`src/myagent/config/settings.py`），`MYAGENT_SQLITE_PATH` | `tests/test_settings.py`（默认值、`.env` 覆盖、`~` 展开） |
+| 向量存 **Qdrant** | `QdrantSettings`（同上），`MYAGENT_QDRANT_URL/_API_KEY/_COLLECTION/_PREFER_GRPC` | 同上（默认本地无需 key、url/collection 校验、client kwargs） |
+| Embedding 用**阿里云 DashScope** | `EmbeddingSettings`（同上），`EMBED_MODEL_TYPE=dashscope`、`EMBED_MODEL_NAME=qwen3.7-text-embedding-flash` | `tests/test_settings.py`（默认值、`.env` 覆盖、`DASHSCOPE_API_KEY` 回退、维度解析与校验） |
+| 密钥统一走 `.env` + `load_dotenv()` | `src/myagent/config/env.py`、`.env`（忽略）、`.env.example`（提交） | `tests/test_env.py`（文件加载、环境变量优先、空值=未设置、向上搜索、`MYAGENT_ENV_FILE`） |
+
+同时更新：`docs/decision-records/0003`、`0004`、`0005`；`docs/development.md` 新增「环境变量与密钥」
+一节（含变量总表）；`README.md` 增加技术选型表；`PLAN.md` 4.5 / 5.4 / 5.5 标注决策。
+
+环境变量命名约定：凭据用短名（`LLM_*`、`EMBED_*`），项目级开关用 `MYAGENT_*` 前缀
+（`MYAGENT_ENV_FILE` / `MYAGENT_LOG_*` / `MYAGENT_SQLITE_PATH` / `MYAGENT_QDRANT_*`）。
+
+验证结果（`scripts/check.sh`）：
+
+```text
+== ruff format --check ==   11 files already formatted
+== ruff check ==           All checks passed!
+== mypy ==                 Success: no issues found in 6 source files
+== pytest ==               63 passed in 0.19s
+TOTAL                     248 stmts / 74 branches / 100% cover
+== all checks passed ==
+```
+
+遗留：
+
+- Qdrant 本机实例尚未启动（Phase 5 提供 `docker-compose.yml`）；`qdrant-client` 依赖留到 Phase 5 引入。
+- 清华 pip 镜像在本次会话中对本机返回 403，安装时改用 `-i https://pypi.org/simple`；
+  该回退方式已写入 `docs/development.md`。
+- `.env` 中的 `LLM_API_KEY`、`EMBED_API_KEY` 仍需本人填写（`LLM_BASE_URL` / `LLM_MODEL` 已按本机
+  nanobot 基线的阿里云 MaaS 兼容端点填好；`EMBED_MODEL_TYPE` / `EMBED_MODEL_NAME` 已按 DashScope 填好）。
+- `EMBED_DIM` 尚未确认：Phase 5 需用一次真实调用探测 `qwen3.7-text-embedding-flash` 的维度并写回 `.env`。

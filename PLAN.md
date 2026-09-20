@@ -744,6 +744,11 @@ Vector DB
 
 不需要复杂数据库架构。
 
+决策（2026-09-20，见 ADR-0003）：**SQLite** 存文档、chunk 与元数据（`MYAGENT_SQLITE_PATH`，
+默认 `data/myagent.db`）；**Qdrant** 存向量（`MYAGENT_QDRANT_URL`，本地默认 `http://localhost:6333`）。
+两者用 `document_id` / `chunk_id` 关联，通过 `SQLiteSettings` / `QdrantSettings` 读取配置，
+存储实现不直接读环境变量。
+
 ## 4.6 Memory Retrieval
 
 实现：
@@ -885,6 +890,12 @@ class BaseEmbedder:
         ...
 ```
 
+决策（2026-09-20，见 ADR-0005）：默认使用**阿里云 DashScope**（`EMBED_MODEL_TYPE=dashscope`，
+`EMBED_MODEL_NAME=qwen3.7-text-embedding-flash`，OpenAI 兼容模式）。配置项为
+`EMBED_MODEL_TYPE` / `EMBED_MODEL_NAME` / `EMBED_API_KEY` / `EMBED_BASE_URL` /（可选）`EMBED_DIM`，
+由 `EmbeddingSettings` 读取；`EMBED_DIM` 留空时在 Phase 5 用一次真实调用探测维度，并作为
+Qdrant collection 的向量维度。`EMBED_MODEL_TYPE` 允许切到 `openai` 作为对比基线。
+
 ## 5.5 Vector Store
 
 抽象：
@@ -899,10 +910,12 @@ class BaseVectorStore:
 第一版使用：
 
 ```text
-Chroma / FAISS
+Qdrant
 ```
 
-二选一即可。
+决策（2026-09-20，见 ADR-0003）：选 **Qdrant** 而不是 Chroma / FAISS —— 前者是完整向量数据库
+（HNSW + payload 过滤 + 持久化），后两者分别是本地库与索引文件，在生产形态与过滤语义上更弱。
+本地用 docker 启动，云端只需 url + api key，配置形状一致；`qdrant-client` 依赖在 Phase 5 引入。
 
 ## 5.6 Retriever
 

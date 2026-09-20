@@ -15,11 +15,54 @@ scripts/check.sh                  # 质量门
 - 本机 python.org 的 3.12 框架版**没有自带 CA 证书包**，直接 `pip install` 会报
   `CERTIFICATE_VERIFY_FAILED`。`scripts/bootstrap.sh` 在这种情况下自动导出
   `SSL_CERT_FILE=/etc/ssl/cert.pem`（macOS 系统信任库）。
-- **依赖管理策略**：runtime 依赖默认是零（Phase 0 的 `dependencies = []`）。新增依赖必须满足两条：
+- **依赖管理策略**：runtime 依赖保持最小。新增依赖必须满足两条：
   （1）写清为什么标准库不够；（2）记入当阶段的工作记录或 ADR。开发期工具统一放在
   `[project.optional-dependencies].dev`，不进入运行时依赖。
 
-## 2. 代码规范
+- 目前唯一的运行时依赖是 `python-dotenv>=1.0`（理由见 ADR-0004）；`qdrant-client` 等将在
+  Phase 5 按需引入。
+- pip 镜像：本机默认走清华镜像。若该镜像返回 403（`you've been denied access`），
+  用官方源重试：`PIP_INDEX_URL=https://pypi.org/simple scripts/bootstrap.sh`。
+
+## 2. 环境变量与密钥
+
+密钥只走一条路径：`.env` → `load_dotenv()` → `get_env` / `require_env`，细节见
+[ADR-0004](./decision-records/0004-secrets-and-env-files.md)。
+
+```bash
+cp .env.example .env        # 首次：复制模板（.env 已被 git 忽略）
+# 填入 LLM / Embedding / Qdrant 的 key，然后：
+MYAGENT_ENV_FILE=/absolute/path/to/.env python -m myagent.cli   # 可选：指定别的 .env
+```
+
+```python
+from myagent.config import get_env, load_env, require_env
+
+load_env()                                  # 只加载一次即可，重复调用是幂等的
+base_url = get_env("MYAGENT_LLM_BASE_URL", "https://api.openai.com/v1")
+api_key = require_env("MYAGENT_LLM_API_KEY")  # 未填则抛 MissingEnvError
+```
+
+| 变量 | 用途 | 默认 |
+| --- | --- | --- |
+| `MYAGENT_ENV_FILE` | 指定 `.env` 路径（绕过向上搜索） | 无 |
+| `MYAGENT_LOG_LEVEL` / `MYAGENT_LOG_FORMAT` | 日志级别与格式 | `INFO` / `text` |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI 兼容 LLM 端点（Phase 2） | 无 |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` | 官方端点备选 key（Phase 2） | 无 |
+| `EMBED_MODEL_TYPE` / `EMBED_MODEL_NAME` | Embedding 提供方与模型（Phase 5，ADR-0005） | `dashscope` / `qwen3.7-text-embedding-flash` |
+| `EMBED_API_KEY` / `EMBED_BASE_URL` / `EMBED_DIM` | Embedding 凭据、端点（留空=提供方默认）、维度（留空=服务决定） | 空 / 空 / 空 |
+| `MYAGENT_SQLITE_PATH` | 文档与元数据库文件（ADR-0003） | `data/myagent.db` |
+| `MYAGENT_QDRANT_URL` / `_API_KEY` / `_COLLECTION` / `_PREFER_GRPC` | 向量库连接（ADR-0003） | `http://localhost:6333` / 空 / `myagent_documents` / `false` |
+| `COHERE_API_KEY`、`TAVILY_API_KEY` | 可选：Reranker（Phase 5.7）、Web 工具（Phase 7） | 无 |
+
+约定：
+
+- 提交新密钥时**同步更新 `.env.example`**，保证模板始终是「项目需要哪些 key」的唯一清单。
+- 命名约定：凭据类用短名（`LLM_*`、`EMBED_*`），项目级开关用 `MYAGENT_*` 前缀。
+- 值为空视为未设置；代码中不要用 `os.environ.get(name, "")` 判断是否已配置。
+- 任何日志、异常、测试快照都不得包含密钥值。
+
+## 3. 代码规范
 
 | 规则 | 工具 / 位置 | 理由 |
 | --- | --- | --- |
@@ -33,7 +76,7 @@ scripts/check.sh                  # 质量门
 命名约定：模块与函数用 `snake_case`，类用 `PascalCase`，常量用 `UPPER_SNAKE_CASE`，
 内部实现用前导下划线。测试目录放宽注释类规则（见 `pyproject.toml` 的 `per-file-ignores`）。
 
-## 3. Logging 约定
+## 4. Logging 约定
 
 实现见 `src/myagent/observability/logging.py`，三条规则：
 
@@ -52,7 +95,7 @@ scripts/check.sh                  # 质量门
 | `WARNING` | 可恢复的降级（重试、跳过某个来源、截断） |
 | `ERROR` | 本轮失败且需要人看的事件，必须带异常信息 |
 
-## 4. 测试规范
+## 5. 测试规范
 
 - 只放 `tests/` 下，命名 `test_*.py`；`pytest` 配置 `testpaths = ["tests"]`、`pythonpath = ["src"]`
   （不装包也能跑）。
@@ -62,7 +105,7 @@ scripts/check.sh                  # 质量门
   必须提供恢复用的 fixture（参考 `tests/conftest.py`）。
 - 覆盖率：Phase 0～8 用 `scripts/check.sh` 观察，Phase 9 起设定下限（对齐上游的 75%）并写进 CI。
 
-## 5. Git 规范
+## 6. Git 规范
 
 采用 [Conventional Commits](https://www.conventionalcommits.org/)：
 
@@ -90,7 +133,7 @@ scripts/check.sh                  # 质量门
 - 提交前跑 `scripts/check.sh`；pre-commit 只做快速检查，mypy 与 pytest 由质量门负责。
 - 禁止提交：`nanobot/`（上游参照）、`.venv/`、任何密钥、数据集大文件 —— 已由 `.gitignore` 覆盖。
 
-## 6. 质量门
+## 7. 质量门
 
 ```bash
 scripts/check.sh          # ruff format --check → ruff check → mypy → pytest --cov
@@ -107,7 +150,7 @@ pre-commit run --all-files
 
 `.pre-commit-config.yaml` 里的 `mypy` 钩子使用 `language: system`，因此必须在已激活的虚拟环境里运行。
 
-## 7. 文档规范
+## 8. 文档规范
 
 | 文档 | 位置 | 内容 |
 | --- | --- | --- |
