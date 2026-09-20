@@ -51,6 +51,10 @@ Phase 2 的独立运行证据在 [`docs/records/phase-2-migration.md`](./docs/re
 对话会以 JSONL 追加写入 `data/sessions/`（已 git 忽略），工具读写的沙箱目录默认是 `workspace/`
 （其中的 `project-notes.md` 是给 `read_file` / `search_local` 用的示例语料）。
 
+> 如果 `myagent` 报 `ModuleNotFoundError: No module named 'myagent'`：本机 `.venv` 里的 `.pth`
+> 被 macOS 打上了 `hidden` 标志，Python 的 `site` 会读不到它。执行 `chflags -R nohidden .venv`
+> 即可（诊断细节见 [`docs/records/phase-3-refactor.md`](./docs/records/phase-3-refactor.md) §8.2）。
+
 密钥统一通过 `python-dotenv` 的 `load_dotenv()` 读取（`MYAGENT_ENV_FILE` 可指向别处的 `.env`）：
 
 ```python

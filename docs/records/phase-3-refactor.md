@@ -183,37 +183,35 @@ Phase 2 基线是 258 项测试 / 1499 stmts；本阶段新增 46 项测试、26
 不是笔误。教训：新增测试后先跑 `scripts/check.sh` 再写文档，否则文档里的行号会因为
 `ruff format` 重排行而整体漂移（本次就是这么发现的）。
 
-### 8.2 `myagent` 命令行入口失效（`.venv` 的可编辑安装被破坏）
+### 8.2 `myagent` 命令行入口失效（`.venv` 被 macOS 打了 `hidden` 标志）
 
-**现象**：验收时 `.venv/bin/myagent tools` 报 `ModuleNotFoundError: No module named 'myagent'`，
+**现象**：在普通终端里 `.venv/bin/myagent tools` 报 `ModuleNotFoundError: No module named 'myagent'`，
 而 `PYTHONPATH=src .venv/bin/myagent tools` 正常。
 
-**定位过程**（三步，每步都可复现）：
+**根因（实测）**：`.venv` 整棵树被 macOS 打上了 `hidden` 标志
+（`ls -lO .venv/lib/python3.12/site-packages | grep -c hidden` → 93，`.venv/bin` → 30）。
+被标记的 `_editable_impl_myagent.pth` 不会被 Python 的 `site` 模块读到，
+于是 `pip install -e .` 写下的 `src` 路径没有进入 `sys.path`——`import myagent` 自然找不到包。
+**文件内容本身是对的**：它的 sha256 与 `myagent-0.1.0.dist-info/RECORD` 里记的一致
+（内容是 `/Users/kyouko/Desktop/2026FALL/kyobot/src`，41 字节）。
 
-1. `PYTHONPATH=src` 能跑 → 框架代码没问题，是 `sys.path` 里少了 `src`，
-   即可编辑安装（`pip install -e .` 写下的 `.pth`）没生效；
-2. `myagent-0.1.0.dist-info/RECORD` 记着 `_editable_impl_myagent.pth` 的
-   `sha256=dlVT0IDT0asuxkZdQkIvaKQW9Ykmnskuug--lFl0goo`；按这个哈希反推，
-   pip 当初写入的内容应当是 `/Users/kyouko/Desktop/2026FALL/kyobot/src`（41 字节，无换行）——
-   而磁盘上的文件已被改成指向一个不存在的 `src_editable_impl_myagent.pth`（mtime 也比 venv 其他文件新）。
-   把内容按 `RECORD` 还原后，`import myagent` 立刻正常；
-3. 但还不够：本机沙箱会给 `.venv` 里的 `.pth` 打上 macOS `hidden` 标志，
-   被标记后 `site` 模块根本读不到它——所以运行前还要 `chflags nohidden` 清掉标志。
-
-**处理**：把 `.pth` 还原成 pip 安装时的字节（sha256 与 `RECORD` 一致），并在运行前清掉隐藏标志。
-`myagent tools` 与两次真实对话随后均正常（§7.2）。
+**修复**（在普通终端里执行一次即可）：
 
 ```bash
-# 复现 / 恢复（`.venv` 已 git 忽略，改的是本地环境）
-printf '%s' "$PWD/src" > .venv/lib/python3.12/site-packages/_editable_impl_myagent.pth
-chflags nohidden .venv/lib/python3.12/site-packages/*.pth
-.venv/bin/myagent tools
+chflags -R nohidden .venv
+.venv/bin/myagent tools        # 4 个内置工具又回来了
 ```
 
-**要记住的**：这是**本地环境**问题，不是框架代码问题——`src/` 里没有任何改动。
-重新执行 `scripts/bootstrap.sh`（`pip install -e '.[dev]'`）会重写这个 `.pth`；
-如果重装后仍然失败，用 `PYTHONPATH=src .venv/bin/myagent ...` 作为兜底
-（README 里本来就有 `PYTHONPATH=src python3 -m pytest` 这条等价路径）。
+验证：`import myagent` 指向 `src/myagent/__init__.py`；
+`myagent chat -s cli:phase3 -m "现在几点了"` 正常回答（还复用了上一轮的时间）。
+
+**诊断中走过的弯路（值得记下）**：这次先在沙箱终端里排查，而沙箱对 `.venv` 的写入是叠加式的——
+文件内容会落到真实文件，`chflags` 这类元数据改动不会。于是同一份文件在两边表现不同
+（沙箱里「清掉标志就能跑」，真实终端里照旧失败），一度误判为「`.pth` 内容被改坏」。
+最后以真实 shell 的实测 + `RECORD` 的 sha256 校验为准。
+
+**兜底**：如果重装（`scripts/bootstrap.sh`）后仍然失败，用
+`PYTHONPATH=src .venv/bin/myagent ...`（README 里本来就有 `PYTHONPATH=src python3 -m pytest` 这条等价路径）。
 
 ## 9. 结论与遗留问题
 

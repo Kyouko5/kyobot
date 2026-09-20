@@ -915,7 +915,7 @@ tests/
 | `src/myagent/agent/loop.py` | 263 行 | 4 阶段改为契约注入；`TurnContext.error`；超预算不发请求 |
 | `docs/design.md` | 800 行 | V2 设计：职责表 / 八个契约签名 / 装配图 / 差异表 / 四个答辩问题 |
 | `docs/decision-records/0007-framework-extension-points.md` | 87 行 | Protocol + 装配注入的决策、后果与 6 个备选方案 |
-| `docs/records/phase-3-refactor.md` | 241 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 修掉的两个真实问题 |
+| `docs/records/phase-3-refactor.md` | 239 行 | 工作记录：Baseline → 方案 → 实现 → 真实 transcript → 质量门 → 修掉的两个真实问题 |
 | `tests/test_contracts.py` + `tests/test_runtime.py` | 2 文件 552 行 | 契约 / 边界 / 装配的测试（含 AST import 检查） |
 
 `src/myagent/` 从 30 个文件 3112 行增长到 **39 个文件 3910 行**。
