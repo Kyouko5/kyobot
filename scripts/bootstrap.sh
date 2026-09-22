@@ -16,7 +16,8 @@ if [[ "$(uname -s)" == "Darwin" && -z "${SSL_CERT_FILE:-}" && -f /etc/ssl/cert.p
   echo "== using SSL_CERT_FILE=$SSL_CERT_FILE =="
 fi
 
-# If the configured mirror denies access (HTTP 403), retry against PyPI:
+# If the configured mirror denies access (HTTP 403) or does not carry a package
+# version (Phase 5 hit this with pypdf>=5.0), retry against PyPI:
 #   PIP_INDEX_URL=https://pypi.org/simple scripts/bootstrap.sh
 if [[ -n "${PIP_INDEX_URL:-}" ]]; then
   echo "== using PIP_INDEX_URL=$PIP_INDEX_URL =="
