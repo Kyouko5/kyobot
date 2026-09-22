@@ -6,6 +6,12 @@
 本仓采用「理解 → 迁移 → 重新抽象 → 功能增强 → 测试」的路径重建自己的
 代码结构；每一个关键抽象都对应一条决策记录（ADR）。
 
+## 系统架构
+
+<p align="center">
+  <img src="docs/images/framework.png" alt="MyAgent Framework Architecture" width="100%">
+</p>
+
 ## 当前进度
 
 | 阶段 | 目标 | 状态 |
