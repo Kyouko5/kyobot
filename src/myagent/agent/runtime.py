@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from myagent.agent.context import ContextBudget
 from myagent.config.settings import (
     DEFAULT_AGENT_MAX_ITERATIONS,
     DEFAULT_AGENT_MAX_TOOL_RESULT_CHARS,
@@ -51,6 +52,16 @@ class AgentRuntimeConfig:
             raise ValueError(
                 f"context_budget_tokens must be positive when set, got {self.context_budget_tokens}"
             )
+
+    @property
+    def context_budget(self) -> ContextBudget:
+        """The Phase 6 budget: this config's input limit plus PLAN 6.2's shares.
+
+        Built here rather than inside ``build()`` so the formula
+        ``context_window - max_output_tokens - 1024`` and the per-source ratios
+        have exactly one home each (PLAN 6.2's "不写死在 ``build()`` 里").
+        """
+        return ContextBudget(input_tokens=self.context_budget_tokens)
 
     @classmethod
     def from_settings(

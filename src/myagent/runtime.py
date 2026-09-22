@@ -17,9 +17,15 @@ per-turn limits (``AgentRuntimeConfig``), this one wires the objects together.
 
 from __future__ import annotations
 
-from myagent.agent.context import ContextManager, MemoryProvider, SectionedContextManager
+from myagent.agent.context import (
+    ContextManager,
+    DocumentProvider,
+    MemoryProvider,
+    SectionedContextManager,
+)
 from myagent.agent.loop import AgentLoop, MessageBus
 from myagent.agent.runtime import AgentRuntimeConfig
+from myagent.agent.token_budget import TokenCounter
 from myagent.config.settings import Settings
 from myagent.memory.manager import MemoryManager
 from myagent.memory.sqlite_store import SQLiteMemoryStore
@@ -48,6 +54,7 @@ def build_agent(
     runtime: AgentRuntimeConfig | None = None,
     bus: MessageBus | None = None,
     memory: MemoryProvider | None = None,
+    retriever: DocumentProvider | None = None,
 ) -> AgentLoop:
     """Assemble the agent runtime.
 
@@ -61,27 +68,54 @@ def build_agent(
     Passing ``settings.memory=MemorySettings(enabled=False)`` keeps the wiring but
     turns recall and automatic writes off — the switch the Phase 8 comparison
     uses.
+
+    ``retriever`` is the Phase 5/6 counterpart for documents: the default is
+    :func:`build_rag`, switched by ``settings.rag=RagSettings(enabled=False)`` at
+    the pipeline (``RagPipeline.recall``). The context manager is built with
+    ``runtime.context_budget`` (PLAN 6.2) and the model's own counter when it has
+    one (PLAN 6.5), so neither the policy nor the measurement is hard-coded here.
     """
     resolved = settings if settings is not None else Settings.from_env()
     resolved_model = model if model is not None else OpenAICompatModel(resolved.llm)
     resolved_sessions = (
         sessions if sessions is not None else JsonlSessionStore.from_settings(resolved.agent)
     )
+    resolved_runtime = (
+        runtime
+        if runtime is not None
+        else AgentRuntimeConfig.from_settings(resolved.agent, resolved.llm)
+    )
     return AgentLoop(
         model=resolved_model,
         tools=tools if tools is not None else build_default_registry(resolved.agent),
         context=context
         if context is not None
-        else SectionedContextManager(resolved.agent.workspace),
+        else SectionedContextManager(
+            resolved.agent.workspace,
+            budget=resolved_runtime.context_budget,
+            tokens=_token_counter(resolved_model),
+        ),
         sessions=resolved_sessions,
-        runtime=runtime
-        if runtime is not None
-        else AgentRuntimeConfig.from_settings(resolved.agent, resolved.llm),
+        runtime=resolved_runtime,
         bus=bus,
         memory=memory
         if memory is not None
         else build_memory(resolved, model=resolved_model, sessions=resolved_sessions),
+        retriever=retriever if retriever is not None else build_rag(resolved),
     )
+
+
+def _token_counter(model: BaseModel) -> TokenCounter | None:
+    """The model's own token counter, when it has one (PLAN 6.5).
+
+    ``BaseModel.count_tokens`` is part of the Phase 2 contract but a duck-typed
+    fake may omit it, and the real implementation answers ``None`` until a
+    provider tokenizer lands — both mean "estimate instead", never "fail".
+    """
+    counter = getattr(model, "count_tokens", None)
+    if not callable(counter):
+        return None
+    return lambda messages: counter(messages)
 
 
 def build_memory(

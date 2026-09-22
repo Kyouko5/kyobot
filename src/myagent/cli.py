@@ -12,6 +12,8 @@
     myagent search "GraphRAG 的核心思想" -k 5
     myagent docs list
     myagent docs delete <document_id>
+    myagent session compact cli:default   # 把旧对话压成摘要检查点（Phase 6）
+    myagent chat --show-context           # 打印这一轮各 section 的预算账本（Phase 6）
 
 Standard library ``argparse`` only: the framework keeps its runtime dependency
 list at one entry (``openai``, ADR-0006) and the CLI is thin enough not to need
@@ -27,11 +29,15 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from myagent.agent.loop import AgentLoop
+from myagent.agent.compaction import DEFAULT_KEEP_RECENT_TURNS, ModelSummarizer, compact_session
+from myagent.agent.context import ContextBundle, ContextReport, SectionReport
+from myagent.agent.loop import AgentLoop, TurnContext
 from myagent.config.env import MissingEnvError
 from myagent.config.settings import DEFAULT_RAG_TOP_K, LLMSettings, Settings
 from myagent.memory.manager import MemoryManager
 from myagent.memory.types import KINDS, Kind, MemoryRecord
+from myagent.models.base import LLMError
+from myagent.models.openai_compat import OpenAICompatModel
 from myagent.observability.logging import configure_logging
 from myagent.rag.embedder import EmbeddingError
 from myagent.rag.loader import LoaderError
@@ -40,6 +46,7 @@ from myagent.rag.types import RetrievedChunk
 from myagent.rag.vectorstore import VectorStoreError
 from myagent.runtime import build_agent, build_memory, build_rag
 from myagent.session.base import DEFAULT_SESSION_KEY
+from myagent.session.manager import JsonlSessionStore
 
 __all__ = ["main"]
 
@@ -61,6 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _memory(args)
     if args.command in ("ingest", "search", "docs"):
         return _rag(args)
+    if args.command == "session":
+        return _session(args)
     return _chat(args)
 
 
@@ -77,10 +86,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"session key to store the conversation under (default {DEFAULT_SESSION_KEY})",
     )
 
+    chat.add_argument(
+        "--show-context",
+        action="store_true",
+        help="print each context section's budget before the answer (Phase 6)",
+    )
+
     subcommands.add_parser("tools", help="list the registered tools")
     _add_memory_parser(subcommands)
     _add_rag_parsers(subcommands)
+    _add_session_parser(subcommands)
     return parser
+
+
+def _add_session_parser(
+    subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """``myagent session compact <key>``: PLAN 6.4's explicit compaction.
+
+    One verb, because the other session operations already exist where they are
+    used (``/clear`` and ``/session`` inside ``myagent chat``, and the raw JSONL
+    under ``AGENT_SESSIONS_DIR`` for everything else).
+    """
+    session = subcommands.add_parser("session", help="inspect and maintain stored sessions")
+    verbs = session.add_subparsers(dest="session_command", required=True)
+
+    compact = verbs.add_parser("compact", help="summarise old turns into a checkpoint")
+    compact.add_argument("key", help=f"session key to compact (default {DEFAULT_SESSION_KEY})")
+    compact.add_argument(
+        "--keep-recent",
+        type=int,
+        default=DEFAULT_KEEP_RECENT_TURNS,
+        help=f"how many turns stay verbatim (default {DEFAULT_KEEP_RECENT_TURNS})",
+    )
 
 
 def _add_memory_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -234,6 +272,60 @@ def _hit_line(hit: RetrievedChunk) -> str:
     return f"{citation(hit)}  score={hit.score:.3f}\n    {snippet}"
 
 
+def _session(args: argparse.Namespace) -> int:
+    """Dispatch ``myagent session <verb>``; needs SQLite/session files, not a model."""
+    sessions = JsonlSessionStore.from_settings(Settings.from_env().agent)
+    return _session_compact(sessions, args)
+
+
+def _session_compact(sessions: JsonlSessionStore, args: argparse.Namespace) -> int:
+    """Sumarise the turns before the last ``--keep-recent`` into a checkpoint.
+
+    The summary is the one thing here that needs a model, so the credentials are
+    checked before anything is read: a failure must not leave a half-compacted
+    session behind. The write itself is a single
+    :meth:`~myagent.session.base.SessionStore.commit_summary`, after which the
+    replayed transcript starts later and the JSONL keeps every original line.
+    """
+    llm_settings = LLMSettings.from_env()
+    try:
+        llm_settings.require_model()
+        llm_settings.require_api_key()
+    except MissingEnvError as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 2
+    session = sessions.get_or_create(args.key)
+    if not session.messages:
+        print(f"session {args.key} has no messages yet")
+        return 0
+    summarizer = ModelSummarizer(OpenAICompatModel(llm_settings))
+    try:
+        result = asyncio.run(
+            compact_session(session, summarizer, keep_recent_turns=args.keep_recent)
+        )
+    except LLMError as exc:
+        print(f"myagent: could not summarise {args.key}: {exc}", file=sys.stderr)
+        return 1
+    report = result.report
+    if not report.compacted:
+        print(
+            f"nothing to compact: {args.key} has fewer than {args.keep_recent + 1} "
+            "turn(s) to replay"
+        )
+        return 0
+    sessions.commit_summary(args.key, summary=result.summary, boundary=result.boundary)
+    print(
+        f"compacted {args.key}: {report.turns_removed} turn(s) "
+        f"({report.messages_removed} message(s)) -> summary"
+    )
+    print(
+        f"  tokens: {report.before_tokens} -> {report.after_tokens} (saved {report.tokens_saved})"
+    )
+    print(f"  replay starts at message {report.boundary}; originals stay in the JSONL file")
+    print(f"summary:\n{result.summary}")
+    return 0
+
+
 def _memory(args: argparse.Namespace) -> int:
     """Dispatch ``myagent memory <verb>``."""
     manager = build_memory(Settings.from_env())
@@ -357,12 +449,80 @@ def _chat(args: argparse.Namespace) -> int:
 
     loop = build_agent()
     if args.message:
-        print(asyncio.run(loop.run_once(args.message, args.session)))
+        turn = asyncio.run(loop.run_turn(args.message, args.session))
+        if args.show_context:
+            print(_context_transcript(turn))
+        print(turn.require_outbound().content)
         return 0
-    return asyncio.run(_interactive(loop, args.session))
+    return asyncio.run(_interactive(loop, args.session, show_context=args.show_context))
 
 
-async def _interactive(loop: AgentLoop, session_key: str) -> int:
+def _context_transcript(ctx: TurnContext) -> str:
+    """The ``--show-context`` view: every section with its budget accounting.
+
+    PLAN 6's acceptance test reads this transcript, so it prints the four
+    sections by name (``conversation`` / ``memory`` / ``rag`` / ``tools``) plus
+    the two required ones, each with the budget it was given, the tokens it used
+    and what the trimmer did to it (``ContextReport``).
+    """
+    bundle = ctx.require_bundle()
+    report = bundle.report if bundle.report is not None else _unbudgeted_report(bundle)
+    limit = "unlimited" if report.input_tokens is None else str(report.input_tokens)
+    lines = [
+        f"--- context for {ctx.session_key} (turn {ctx.turn_id})",
+        f"budget {limit} token(s), used {report.used}, dropped {report.dropped}",
+    ]
+    for entry in report.sections:
+        kind = "required" if entry.required else "optional"
+        quota = "-" if entry.budget is None else str(entry.budget)
+        action = f"  {entry.action}" if entry.action else ""
+        lines.append(
+            f"  {entry.name:<12} priority={entry.priority} {kind:<8} "
+            f"used={entry.used:<7} budget={quota}{action}"
+        )
+    lines.append(f"  messages ({len(bundle.messages)}): {', '.join(_roles(bundle))}")
+    if bundle.compaction is not None and bundle.compaction.compacted:
+        compacted = bundle.compaction
+        lines.append(
+            f"  conversation compacted: -{compacted.messages_removed} message(s), "
+            f"-{compacted.tokens_saved} token(s)"
+        )
+    lines.append("---")
+    return "\n".join(lines)
+
+
+def _unbudgeted_report(bundle: ContextBundle) -> ContextReport:
+    """A report for a context manager that does not produce one (all quotas unknown)."""
+    return ContextReport(
+        sections=tuple(
+            SectionReport(
+                name=section.name,
+                priority=section.priority,
+                required=section.required,
+                budget=section.budget_tokens,
+                used=section.estimated_tokens(),
+            )
+            for section in bundle.sections
+        ),
+        used=bundle.estimated_tokens,
+    )
+
+
+def _roles(bundle: ContextBundle) -> list[str]:
+    """The message roles, with the repeated ones collapsed (``user x3``)."""
+    roles: list[str] = []
+    for message in bundle.messages:
+        if roles and roles[-1].startswith(f"{message.role} x"):
+            times = int(roles[-1].split(" x")[1]) + 1
+            roles[-1] = f"{message.role} x{times}"
+        elif roles and roles[-1] == message.role:
+            roles[-1] = f"{message.role} x2"
+        else:
+            roles.append(message.role)
+    return roles
+
+
+async def _interactive(loop: AgentLoop, session_key: str, *, show_context: bool = False) -> int:
     """Read lines from stdin until EOF or ``/exit``.
 
     ``/session`` shows the key, ``/clear`` forgets the transcript. Commands are
@@ -388,4 +548,7 @@ async def _interactive(loop: AgentLoop, session_key: str) -> int:
             loop.sessions.clear(session_key)
             print("cleared")
             continue
-        print(f"{_ANSWER_PREFIX}{await loop.run_once(text, session_key)}")
+        turn = await loop.run_turn(text, session_key)
+        if show_context:
+            print(_context_transcript(turn))
+        print(f"{_ANSWER_PREFIX}{turn.require_outbound().content}")

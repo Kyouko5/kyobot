@@ -9,6 +9,12 @@ The two concepts are upstream's, unchanged: a session is the replayable
 transcript (``session/manager.py:344``'s ``get_history``), and ``last_archived``
 marks where compaction last cut, so messages before it stop taking part in the
 context without being deleted from history.
+
+Phase 6 adds the two members that make the cut usable: ``Session.summary`` (the
+text that replaces the archived turns in the prompt) and
+:meth:`SessionStore.commit_summary`, the only way to move ``last_archived``
+forward. Both mirror upstream ``session/manager.py:323``'s
+``commit_summary_checkpoint``.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ class Session:
     messages: list[Message] = field(default_factory=list)
     last_archived: int = 0
     created_at: str = ""
+    summary: str = ""
 
     def transcript(self) -> list[Message]:
         """Messages that still take part in the context (after ``last_archived``)."""
@@ -58,4 +65,13 @@ class SessionStore(Protocol):
 
     def known_keys(self) -> list[str]:
         """Every session key in storage, sorted."""
+        ...
+
+    def commit_summary(self, key: str, *, summary: str, boundary: int) -> Session:
+        """Move the replay boundary forward and keep the summary that replaces it.
+
+        The messages before ``boundary`` are *not* deleted: they stop being
+        replayed, which is what makes compaction auditable (PLAN 6.4). A boundary
+        below the current one is ignored, so compaction can only ever archive more.
+        """
         ...

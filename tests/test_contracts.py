@@ -235,6 +235,12 @@ class MemorySessionStore:
     def known_keys(self) -> list[str]:
         return sorted(self.sessions)
 
+    def commit_summary(self, key: str, *, summary: str, boundary: int) -> Session:
+        session = self.get_or_create(key)
+        session.last_archived = boundary
+        session.summary = summary
+        return session
+
 
 class CountingContextManager:
     """Records requests and returns a fixed bundle (system + user message)."""

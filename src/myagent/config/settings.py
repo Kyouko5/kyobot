@@ -124,6 +124,7 @@ DEFAULT_MEMORY_SHORT_QUERY_CHARS: Final = 8
 
 # --- Phase 5: RAG ------------------------------------------------------------
 
+ENV_RAG_ENABLED: Final = "MYAGENT_RAG_ENABLED"
 ENV_RAG_CHUNK_SIZE: Final = "MYAGENT_RAG_CHUNK_SIZE"
 ENV_RAG_CHUNK_OVERLAP: Final = "MYAGENT_RAG_CHUNK_OVERLAP"
 ENV_RAG_TOP_K: Final = "MYAGENT_RAG_TOP_K"
@@ -133,6 +134,7 @@ ENV_RAG_TOP_K: Final = "MYAGENT_RAG_TOP_K"
 # roughly 300–400 tokens, which fits a citation into a context budget without
 # cutting a paragraph in half, and 120 characters of overlap keeps the sentence
 # that straddles a boundary retrievable from both sides.
+DEFAULT_RAG_ENABLED: Final = True
 DEFAULT_RAG_CHUNK_SIZE: Final = 800
 DEFAULT_RAG_CHUNK_OVERLAP: Final = 120
 DEFAULT_RAG_TOP_K: Final = 5
@@ -358,8 +360,15 @@ class RagSettings:
     experiment of ``docs/records/phase-5-rag.md`` is written down. They are
     settings and not constants so Phase 8 can replay that experiment by setting
     ``MYAGENT_RAG_CHUNK_SIZE`` instead of editing the chunker.
+
+    ``enabled`` is the Phase 6 switch and it is narrower than memory's: it turns
+    retrieval into the *agent's context* on and off
+    (:meth:`myagent.rag.pipeline.RagPipeline.recall`), while ``myagent ingest`` /
+    ``search`` / ``docs`` keep working — they are explicit commands, not "what the
+    agent gets to see". That is the knob the Phase 8 ON/OFF comparison flips.
     """
 
+    enabled: bool = DEFAULT_RAG_ENABLED
     chunk_size: int = DEFAULT_RAG_CHUNK_SIZE
     chunk_overlap: int = DEFAULT_RAG_CHUNK_OVERLAP
     top_k: int = DEFAULT_RAG_TOP_K
@@ -385,6 +394,7 @@ class RagSettings:
         """Build settings from the environment, loading ``.env`` first."""
         load_env()
         return cls(
+            enabled=get_bool_env(ENV_RAG_ENABLED, DEFAULT_RAG_ENABLED),
             chunk_size=_parse_positive_int(
                 ENV_RAG_CHUNK_SIZE, get_env(ENV_RAG_CHUNK_SIZE), DEFAULT_RAG_CHUNK_SIZE
             ),

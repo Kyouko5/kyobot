@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from myagent.agent.context import SectionedContextManager
+from fakes import ScriptedModel
+from myagent.agent.context import ContextRequest, SectionedContextManager
 from myagent.agent.loop import AgentLoop, MessageBus
 from myagent.agent.runtime import AgentRuntimeConfig
 from myagent.config.settings import (
@@ -101,6 +102,38 @@ def test_runtime_limits_are_validated():
         AgentRuntimeConfig(max_tool_result_chars=0)
     with pytest.raises(ValueError, match="context_budget_tokens must be positive"):
         AgentRuntimeConfig(context_budget_tokens=-1)
+
+
+# --------------------------------------------------------------------------
+# Phase 6: the context budget and the model's own token counter
+# --------------------------------------------------------------------------
+
+
+def test_the_context_budget_comes_from_the_runtime_config(tmp_path):
+    """PLAN 6.2: the limit is the runtime's, never a constant inside ``build()``."""
+    loop = build_agent(settings(tmp_path), model=ScriptedModel())
+
+    bundle = loop.context.build(ContextRequest(user_input="hello"))
+
+    assert bundle.report is not None
+    assert bundle.report.input_tokens == 128_000 - 4096 - 1024
+    # No counter on the fake, so the number is the estimate (PLAN 6.5's fallback).
+    assert bundle.estimated_tokens == sum(section.estimated_tokens() for section in bundle.sections)
+
+
+def test_a_model_with_a_token_counter_is_the_one_that_measures(tmp_path):
+    """``count_tokens`` wins over the estimate when the provider has one."""
+
+    class CountingModel(ScriptedModel):
+        def count_tokens(self, messages, tools=None):
+            return 10_000
+
+    loop = build_agent(settings(tmp_path), model=CountingModel())
+
+    bundle = loop.context.build(ContextRequest(user_input="hello"))
+
+    assert bundle.estimated_tokens == 10_000
+    assert bundle.report is not None and bundle.report.used == 10_000
 
 
 # --------------------------------------------------------------------------

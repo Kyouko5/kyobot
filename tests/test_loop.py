@@ -7,8 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from fakes import ProbeTool, ScriptedModel, call, tool_response
-from myagent.agent.context import ContextManager, SectionedContextManager
+from fakes import BrokenRetriever, ProbeTool, ScriptedModel, StaticRetriever, call, tool_response
+from myagent.agent.context import (
+    SECTION_RAG,
+    ContextItem,
+    ContextManager,
+    DocumentProvider,
+    SectionedContextManager,
+)
 from myagent.agent.loop import AgentLoop, MessageBus, TurnContext
 from myagent.agent.runtime import AgentRuntimeConfig
 from myagent.agent.types import InboundMessage, StopReason
@@ -25,6 +31,7 @@ def build_loop(
     bus: MessageBus | None = None,
     tools: ToolRegistry | None = None,
     context: ContextManager | None = None,
+    retriever: DocumentProvider | None = None,
     runtime: AgentRuntimeConfig | None = None,
     **runtime_overrides: object,
 ) -> AgentLoop:
@@ -40,6 +47,7 @@ def build_loop(
         sessions=JsonlSessionStore.from_settings(settings),
         runtime=resolved_runtime,
         bus=bus,
+        retriever=retriever,
     )
 
 
@@ -280,3 +288,41 @@ async def test_the_build_stage_hands_everything_to_the_context_manager(tmp_path)
     assert request.budget_tokens == 4321  # type: ignore[attr-defined]
     # The tool schemas travel with the request so the budget can see them.
     assert [definition["function"]["name"] for definition in request.tools] == ["echo"]  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------
+# Phase 6: the document port and the whole turn
+# --------------------------------------------------------------------------
+
+
+async def test_retrieved_documents_reach_the_rag_section(tmp_path):
+    """PLAN 6.5: the loop asks the retriever, the manager turns the items into a section."""
+    retriever = StaticRetriever(
+        [ContextItem("a graph is built from the document", reference="abc#0", score=0.9)]
+    )
+    loop = build_loop(
+        ScriptedModel(LLMResponse(content="it is a graph")), tmp_path, retriever=retriever
+    )
+
+    ctx = await loop.run_turn("what is GraphRAG?", "cli:test")
+    bundle = ctx.require_bundle()
+
+    assert ctx.outbound is not None and ctx.outbound.content == "it is a graph"
+    assert retriever.queries == ["what is GraphRAG?"]
+    section = next(entry for entry in bundle.sections if entry.name == SECTION_RAG)
+    assert section.content == ("Retrieved documents:\n- a graph is built from the document [abc#0]")
+    # The section is part of the leading system message, before this turn's question.
+    assert "Retrieved documents:" in bundle.messages[0].content
+    assert bundle.messages[-1].content == "what is GraphRAG?"
+
+
+async def test_a_retriever_that_fails_costs_context_but_not_the_turn(tmp_path):
+    """Retrieval is an enhancement: a Qdrant outage is a missing section, not a failed turn."""
+    loop = build_loop(
+        ScriptedModel(LLMResponse(content="answered anyway")), tmp_path, retriever=BrokenRetriever()
+    )
+
+    ctx = await loop.run_turn("hello", "cli:test")
+
+    assert ctx.require_outbound().content == "answered anyway"
+    assert SECTION_RAG not in [section.name for section in ctx.require_bundle().sections]

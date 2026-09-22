@@ -10,6 +10,12 @@ Like ``MemoryManager`` for memory, this is a *facade*: the CLI, the future
 only be ingested one way (load → chunk → embed → store, in that order) and only
 be read one way (retriever → optional reranker).
 
+Phase 6 adds the second reader: :meth:`RagPipeline.recall` is the agent-facing
+``DocumentProvider`` (``src/myagent/agent/context.py``) and returns neutral
+context items, so the context manager can trim chunks by score without importing
+anything from this package. ``MYAGENT_RAG_ENABLED=false`` turns it into an empty
+recall — the switch Phase 8's ON/OFF comparison uses.
+
 The ingest path in detail, because the order is the whole design:
 
 1. every file is loaded and chunked *before* any network call, so a typo in the
@@ -30,6 +36,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from myagent.agent.context import ContextItem
 from myagent.config.env import remember_env
 from myagent.config.settings import ENV_EMBED_DIM, EmbeddingSettings, RagSettings
 from myagent.observability.logging import get_logger
@@ -42,7 +49,13 @@ from myagent.rag.store import SQLiteDocumentStore, StoredDocument
 from myagent.rag.types import Chunk, Document, RetrievedChunk
 from myagent.rag.vectorstore import BaseVectorStore
 
-__all__ = ["IngestReport", "IngestedDocument", "RagPipeline", "citation"]
+__all__ = [
+    "IngestReport",
+    "IngestedDocument",
+    "RagPipeline",
+    "citation",
+    "citation_label",
+]
 
 logger = get_logger(__name__)
 
@@ -93,9 +106,25 @@ def citation(hit: RetrievedChunk) -> str:
     The bracketed part is the stable half: it is what an answer quotes and what a
     reader can search for in ``myagent docs list``. The rest is the human half.
     """
+    return f"[{hit.document.id}#{hit.chunk.index}] {_citation_where(hit)}"
+
+
+def citation_label(hit: RetrievedChunk) -> str:
+    """The same citation without the brackets around its id.
+
+    Two consumers want the same identity in two shapes: the CLI prints
+    :func:`citation` so a reader can quote it, and
+    :class:`~myagent.agent.context.ContextItem` carries this one because the
+    context renderer adds the brackets itself.
+    """
+    return f"{hit.document.id}#{hit.chunk.index} {_citation_where(hit)}"
+
+
+def _citation_where(hit: RetrievedChunk) -> str:
+    """The human half of a citation: which document, and which page it came from."""
     page = hit.chunk.metadata.get("page")
     where = f"page {page}" if page is not None else "no page"
-    return f"[{hit.document.id}#{hit.chunk.index}] {hit.document.title or hit.document.source} ({where})"
+    return f"{hit.document.title or hit.document.source} ({where})"
 
 
 class RagPipeline:
@@ -215,6 +244,28 @@ class RagPipeline:
         limit = self._settings.top_k if top_k is None else top_k
         hits = await self.retriever.retrieve(query, limit, document_ids=document_ids)
         return await self.reranker.rerank(query, hits, limit)
+
+    async def recall(self, query: str, *, top_k: int | None = None) -> list[ContextItem]:
+        """The agent-facing recall of PLAN 6.5: citable context items, best first.
+
+        Same retrieval path as :meth:`retrieve` (embed → search → rerank), one
+        layer of presentation less: each item is the chunk's text plus the
+        citation as its reference and the score the budget trims by. An empty
+        answer is not an error — it means "nothing to add this turn", which is
+        also what ``MYAGENT_RAG_ENABLED=false`` answers, deliberately.
+        """
+        if not self._settings.enabled:
+            logger.debug("rag is disabled (MYAGENT_RAG_ENABLED); recall returns nothing")
+            return []
+        hits = await self.retrieve(query, top_k)
+        return [
+            ContextItem(
+                text=hit.chunk.text.strip(),
+                reference=citation_label(hit),
+                score=hit.score,
+            )
+            for hit in hits
+        ]
 
     def build_context(self, chunks: Sequence[RetrievedChunk]) -> str:
         """Render retrieved chunks as citable context for a prompt (PLAN 5.8).

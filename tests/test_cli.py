@@ -10,6 +10,21 @@ from typing import Any
 import pytest
 
 from myagent import cli
+from myagent.agent.context import (
+    SECTION_CONVERSATION,
+    SECTION_MEMORY,
+    SECTION_QUERY,
+    SECTION_RAG,
+    SECTION_SYSTEM,
+    SECTION_TOOLS,
+    CompactionReport,
+    ContextBundle,
+    ContextReport,
+    ContextSection,
+    SectionReport,
+)
+from myagent.agent.loop import TurnContext
+from myagent.agent.types import Message, OutboundMessage, StopReason
 from myagent.runtime import build_agent
 
 
@@ -26,14 +41,26 @@ class FakeSessions:
 class FakeLoop:
     """Stands in for :class:`~myagent.agent.loop.AgentLoop`."""
 
-    def __init__(self, answer: str = "answer") -> None:
+    def __init__(self, answer: str = "answer", *, bundle: ContextBundle | None = None) -> None:
         self.answer = answer
+        self.bundle = bundle
         self.calls: list[tuple[str, str]] = []
         self.sessions = FakeSessions()
 
-    async def run_once(self, user_input: str, session_key: str = "cli:default") -> str:
+    async def run_turn(self, user_input: str, session_key: str = "cli:default") -> TurnContext:
         self.calls.append((user_input, session_key))
-        return self.answer
+        ctx = TurnContext(session_key=session_key, user_input=user_input)
+        ctx.bundle = self.bundle
+        ctx.outbound = OutboundMessage(
+            session_key=session_key,
+            content=self.answer,
+            stop_reason=StopReason.COMPLETED,
+            tools_used=(),
+        )
+        return ctx
+
+    async def run_once(self, user_input: str, session_key: str = "cli:default") -> str:
+        return (await self.run_turn(user_input, session_key)).require_outbound().content
 
 
 @pytest.fixture
@@ -628,3 +655,274 @@ def test_the_rag_commands_need_a_verb_for_docs(capsys):
 
     assert info.value.code == 2
     assert "the following arguments are required: docs_command" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Phase 6: `myagent chat --show-context` and `myagent session compact`
+# --------------------------------------------------------------------------
+
+MARKER = "w" * 80
+
+
+def make_bundle(
+    *,
+    reporting: bool = True,
+    input_tokens: int | None = 120,
+    used: int = 13,
+    dropped: int = 20,
+    actions: dict[str, str] | None = None,
+    compaction: CompactionReport | None = None,
+) -> ContextBundle:
+    """A hand-built bundle with the six sections a real build produces.
+
+    ``reporting=False`` models a context manager that produces no
+    ``ContextReport`` (the CLI then falls back to the sections themselves).
+    """
+    notes = actions or {}
+    sections = (
+        ContextSection(SECTION_SYSTEM, 0, True, "you are MyAgent"),
+        ContextSection(SECTION_QUERY, 1, True, [Message.user("hi")]),
+        ContextSection(
+            SECTION_CONVERSATION,
+            2,
+            False,
+            [Message.user("earlier"), Message.assistant("answered")],
+        ),
+        ContextSection(SECTION_MEMORY, 4, False, "Relevant memory:\n- prefers Python"),
+        ContextSection(SECTION_RAG, 5, False, "Retrieved documents:\n- chunk [d1#0]"),
+        ContextSection(SECTION_TOOLS, 6, False, "Available tools:\n- echo: probe"),
+    )
+    report = None
+    if reporting:
+        report = ContextReport(
+            sections=tuple(
+                SectionReport(
+                    name=section.name,
+                    priority=section.priority,
+                    required=section.required,
+                    budget=12,
+                    used=section.estimated_tokens(),
+                    dropped=6 if section.name in notes else 0,
+                    action=notes.get(section.name, ""),
+                )
+                for section in sections
+            ),
+            input_tokens=input_tokens,
+            used=used,
+            dropped=dropped,
+        )
+    return ContextBundle(
+        messages=[
+            Message.system("you are MyAgent"),
+            Message.user("earlier"),
+            Message.assistant("answered"),
+            Message.user("hi"),
+        ],
+        transcript_start=3,
+        sections=sections,
+        estimated_tokens=sum(section.estimated_tokens() for section in sections),
+        report=report,
+        compaction=compaction,
+    )
+
+
+def test_chat_shows_every_context_section_when_asked(capsys, monkeypatch, isolated_env):
+    bundle = make_bundle(actions={SECTION_CONVERSATION: "compacted 4 message(s) (2 turn(s))"})
+    loop = FakeLoop("42", bundle=bundle)
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
+
+    assert cli.main(["chat", "-m", "hi", "--show-context"]) == 0
+
+    out = capsys.readouterr().out
+    assert "--- context for cli:default (turn " in out
+    assert "budget 120 token(s), used 13, dropped 20" in out
+    for name in ("conversation", "memory", "rag", "tools"):
+        assert name in out
+    assert "compacted 4 message(s) (2 turn(s))" in out
+    assert "required" in out and "optional" in out
+    assert "messages (4): system, user, assistant, user" in out
+    assert out.endswith("42\n")
+
+
+def test_chat_shows_the_context_of_an_automatic_compaction(capsys, monkeypatch, isolated_env):
+    bundle = make_bundle(
+        input_tokens=None,
+        compaction=CompactionReport(
+            compacted=True, messages_removed=6, tokens_saved=90, turns_removed=3
+        ),
+    )
+    loop = FakeLoop("42", bundle=bundle)
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
+
+    assert cli.main(["chat", "-m", "hi", "--show-context"]) == 0
+
+    out = capsys.readouterr().out
+    assert "conversation compacted: -6 message(s), -90 token(s)" in out
+    assert "budget unlimited token(s)" in out
+
+
+def test_the_message_summary_collapses_repeats():
+    bundle = ContextBundle(
+        messages=[
+            Message.system("system"),
+            Message.user("a"),
+            Message.user("b"),
+            Message.user("c"),
+        ],
+        transcript_start=3,
+    )
+
+    assert cli._roles(bundle) == ["system", "user x3"]
+
+
+def test_chat_show_context_works_without_a_report(capsys, monkeypatch, isolated_env):
+    """A custom context manager need not produce a report; the sections still print."""
+    loop = FakeLoop("42", bundle=make_bundle(reporting=False))
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
+
+    assert cli.main(["chat", "-m", "hi", "--show-context"]) == 0
+
+    out = capsys.readouterr().out
+    assert "conversation" in out
+    assert "budget unlimited token(s)" in out
+
+
+def test_interactive_chat_can_show_the_context(capsys, monkeypatch, isolated_env):
+    loop = FakeLoop("pong", bundle=make_bundle())
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: loop)
+    replies = iter(["ping", "/exit"])
+
+    monkeypatch.setattr(builtins, "input", lambda prompt="": next(replies))
+
+    assert cli.main(["chat", "--show-context"]) == 0
+
+    out = capsys.readouterr().out
+    assert "--- context for cli:default" in out
+    assert "agent> pong" in out
+
+
+class SummaryModel:
+    """The one model call compaction makes, plus whatever the test wants it to do."""
+
+    def __init__(
+        self, summary: str = "the user compared chunk sizes", error: Exception | None = None
+    ) -> None:
+        self.summary = summary
+        self.error = error
+        self.requests: list[list[Message]] = []
+
+    async def generate(self, messages, *, tools=None):
+        from myagent.models.base import LLMResponse
+
+        self.requests.append(list(messages))
+        if self.error is not None:
+            raise self.error
+        return LLMResponse(content=self.summary)
+
+
+@pytest.fixture
+def cli_session(monkeypatch, tmp_path, isolated_env):
+    """A real session store under ``tmp_path`` and a scripted summariser model."""
+    from myagent.session.manager import JsonlSessionStore
+
+    monkeypatch.setenv("AGENT_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path))
+    store = JsonlSessionStore(tmp_path / "sessions")
+    model = SummaryModel()
+    monkeypatch.setattr(cli, "OpenAICompatModel", lambda *args, **kwargs: model)
+    return store, model
+
+
+def seed_session(store, turns: int = 8) -> list[Message]:
+    messages = [
+        message
+        for index in range(turns)
+        for message in (
+            Message.user(f"question {index} {MARKER}"),
+            Message.assistant(f"answer {index} {MARKER}"),
+        )
+    ]
+    store.append("cli:test", messages)
+    return messages
+
+
+def test_session_compact_summarises_the_old_turns(capsys, cli_session):
+    from myagent.session.manager import JsonlSessionStore
+
+    store, model = cli_session
+    messages = seed_session(store)
+    capsys.readouterr()
+
+    assert cli.main(["session", "compact", "cli:test", "--keep-recent", "2"]) == 0
+
+    out = capsys.readouterr().out
+    assert "compacted cli:test: 6 turn(s) (12 message(s)) -> summary" in out
+    assert "tokens:" in out and "saved" in out
+    assert f"summary:\n{model.summary}" in out
+    assert len(model.requests) == 1
+    assert "Transcript to compress:" in model.requests[0][1].content
+    # The turns are archived, not deleted, and the boundary survives a reload.
+    reloaded = JsonlSessionStore(store.sessions_dir).get_or_create("cli:test")
+    assert len(reloaded.messages) == len(messages)
+    assert reloaded.summary == model.summary
+    assert reloaded.last_archived == 12
+    assert len(reloaded.transcript()) == 4
+
+
+def test_session_compact_says_when_there_is_nothing_to_do(capsys, cli_session):
+    store, model = cli_session
+    store.append("cli:test", [Message.user("hi"), Message.assistant("hello")])
+    capsys.readouterr()
+
+    assert cli.main(["session", "compact", "cli:test"]) == 0
+
+    assert "nothing to compact" in capsys.readouterr().out
+    assert model.requests == []
+
+
+def test_session_compact_reports_an_empty_session(capsys, cli_session):
+    assert cli.main(["session", "compact", "cli:absent"]) == 0
+
+    assert "session cli:absent has no messages yet" in capsys.readouterr().out
+
+
+def test_session_compact_needs_the_credentials(capsys, cli_session, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY")
+
+    assert cli.main(["session", "compact", "cli:test"]) == 2
+
+    assert "LLM_API_KEY is not set" in capsys.readouterr().err
+
+
+def test_session_compact_reports_a_model_failure(capsys, cli_session):
+    from myagent.models.base import LLMError
+
+    store, model = cli_session
+    seed_session(store)
+    model.error = LLMError("provider down")
+    capsys.readouterr()
+
+    assert cli.main(["session", "compact", "cli:test", "--keep-recent", "1"]) == 1
+
+    assert "could not summarise cli:test: provider down" in capsys.readouterr().err
+    # Nothing was written: the boundary only moves after a summary exists.
+    assert store.get_or_create("cli:test").last_archived == 0
+
+
+def test_session_compact_rejects_an_empty_summary(capsys, cli_session):
+    store, model = cli_session
+    seed_session(store)
+    model.summary = "   "
+    capsys.readouterr()
+
+    assert cli.main(["session", "compact", "cli:test", "--keep-recent", "1"]) == 1
+
+    assert "empty summary" in capsys.readouterr().err
+
+
+def test_the_session_commands_need_a_verb(capsys):
+    with pytest.raises(SystemExit) as info:
+        cli.main(["session"])
+
+    assert info.value.code == 2
+    assert "the following arguments are required: session_command" in capsys.readouterr().err

@@ -2,14 +2,16 @@
 
 One file per session, one JSON object per line::
 
-    {"type": "session", "key": "cli:default", "created_at": "...", "last_archived": 0}
+    {"type": "session", "key": "cli:default", "created_at": "...", "last_archived": 0, "summary": ""}
     {"type": "message", "message": {"role": "user", "content": "..."}}
 
 Append-only, like upstream ``session/manager.py:JsonlSessionStore``: a turn only
 adds lines, so a crash can lose the tail but never corrupt earlier history.
-Compaction joins the same file later by moving ``last_archived`` (the reserved
-field) forward instead of deleting messages; Phase 4/6 own that, this module
-only persists and respects it.
+Compaction joins the same file by moving ``last_archived`` (the reserved field)
+forward instead of deleting messages: :meth:`commit_summary` *appends* a fresh
+header record, and ``_read_header`` takes the last one it finds. That keeps the
+append-only promise (a crash can still only lose the tail) while making the
+boundary and the summary durable.
 """
 
 from __future__ import annotations
@@ -36,6 +38,17 @@ _MESSAGE_TYPE = "message"
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _header_record(session: Session) -> dict[str, Any]:
+    """The header line of a session file (rewritten by ``commit_summary`` only)."""
+    return {
+        "type": _HEADER_TYPE,
+        "key": session.key,
+        "created_at": session.created_at or _now(),
+        "last_archived": session.last_archived,
+        "summary": session.summary,
+    }
 
 
 class JsonlSessionStore:
@@ -76,6 +89,19 @@ class JsonlSessionStore:
         self._append_to_disk(session, messages)
         return session
 
+    def commit_summary(self, key: str, *, summary: str, boundary: int) -> Session:
+        """Move the replay boundary forward and persist the summary (PLAN 6.4).
+
+        Only the header changes: the messages before the boundary keep their
+        lines, their order and their content, so the file stays a complete record
+        of what was said and the summary is an addition rather than a rewrite.
+        """
+        session = self.get_or_create(key)
+        session.last_archived = min(max(boundary, session.last_archived), len(session.messages))
+        session.summary = summary
+        self._append_header(session)
+        return session
+
     def clear(self, key: str) -> None:
         """Forget one session and delete its file."""
         self._cache.pop(key, None)
@@ -99,6 +125,7 @@ class JsonlSessionStore:
             key=str(header.get("key", key)),
             last_archived=int(header.get("last_archived", 0) or 0),
             created_at=str(header.get("created_at", "")),
+            summary=str(header.get("summary", "")),
         )
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
@@ -117,17 +144,7 @@ class JsonlSessionStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = []
         if not path.exists():
-            lines.append(
-                json.dumps(
-                    {
-                        "type": _HEADER_TYPE,
-                        "key": session.key,
-                        "created_at": session.created_at or _now(),
-                        "last_archived": session.last_archived,
-                    },
-                    ensure_ascii=False,
-                )
-            )
+            lines.append(json.dumps(_header_record(session), ensure_ascii=False))
         lines.extend(
             json.dumps({"type": _MESSAGE_TYPE, "message": message.to_dict()}, ensure_ascii=False)
             for message in messages
@@ -135,8 +152,21 @@ class JsonlSessionStore:
         with path.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
+    def _append_header(self, session: Session) -> None:
+        """Write one more header record; the last one wins when reading."""
+        path = self.path_for(session.key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_header_record(session), ensure_ascii=False) + "\n")
+
     @staticmethod
     def _read_header(path: Path) -> dict[str, Any]:
+        """The most recent header record (compaction appends a new one per commit).
+
+        Unreadable lines are skipped rather than fatal: a half-written tail must
+        not hide the boundary that a previous, complete commit recorded.
+        """
+        header: dict[str, Any] = {}
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
@@ -144,6 +174,7 @@ class JsonlSessionStore:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
-                    return {}
-                return record if isinstance(record, dict) else {}
-        return {}
+                    continue
+                if isinstance(record, dict) and record.get("type") == _HEADER_TYPE:
+                    header = record
+        return header

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
+from myagent.agent.context import ContextItem
 from myagent.agent.types import Message, ToolCallRequest
 from myagent.models.base import LLMResponse
 from myagent.tools.base import Tool, ToolResult
@@ -275,6 +277,30 @@ class BrokenMemory:
 
     async def observe(self, session_key: str, messages) -> None:
         raise RuntimeError("observe exploded")
+
+
+class StaticRetriever:
+    """The ``DocumentProvider`` port with a fixed answer (Phase 6).
+
+    ``items`` is what every turn is offered, which is how the loop tests check
+    that retrieved chunks reach the RAG section; ``queries`` records what the loop
+    actually asked for.
+    """
+
+    def __init__(self, items: Sequence[ContextItem] = ()) -> None:
+        self.items = list(items)
+        self.queries: list[str] = []
+
+    async def recall(self, query: str, *, top_k: int | None = None) -> list[ContextItem]:
+        self.queries.append(query)
+        return list(self.items)
+
+
+class BrokenRetriever:
+    """A retriever whose every call fails: the loop must survive it (PLAN 6.5)."""
+
+    async def recall(self, query: str, *, top_k: int | None = None):
+        raise RuntimeError("document recall exploded")
 
 
 def _vector(text: str, dim: int) -> list[float]:

@@ -33,7 +33,13 @@ from myagent.rag.loader import (
     UnsupportedFormatError,
     load_document,
 )
-from myagent.rag.pipeline import IngestedDocument, IngestReport, RagPipeline, citation
+from myagent.rag.pipeline import (
+    IngestedDocument,
+    IngestReport,
+    RagPipeline,
+    citation,
+    citation_label,
+)
 from myagent.rag.reranker import BaseReranker, IdentityReranker, ScoreReranker
 from myagent.rag.retriever import BaseRetriever, VectorRetriever
 from myagent.rag.store import SQLiteDocumentStore, StoredDocument
@@ -90,6 +96,7 @@ __all__ = [
     "build_embedder",
     "chunk_id",
     "citation",
+    "citation_label",
     "content_id",
     "heading_at",
     "load_document",

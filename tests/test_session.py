@@ -44,6 +44,7 @@ def test_appended_messages_are_written_as_jsonl_and_reload(tmp_path):
         "key": "cli:test",
         "created_at": sessions.get_or_create("cli:test").created_at,
         "last_archived": 0,
+        "summary": "",
     }
     assert lines[1] == {"type": "message", "message": {"role": "user", "content": "hi"}}
 

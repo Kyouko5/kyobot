@@ -9,11 +9,12 @@ import pytest
 from pdf_fixture import pdf_bytes
 
 from fakes import BagOfWordsEmbedder, DictionaryVectorStore, SilentEmbedder
+from myagent.agent.context import DocumentProvider
 from myagent.config.settings import EmbeddingSettings, RagSettings, SQLiteSettings
 from myagent.rag.chunker import FixedSizeChunker
 from myagent.rag.embedder import EmbeddingError
 from myagent.rag.loader import UnsupportedFormatError
-from myagent.rag.pipeline import IngestReport, RagPipeline, citation
+from myagent.rag.pipeline import IngestReport, RagPipeline, citation, citation_label
 from myagent.rag.reranker import IdentityReranker, ScoreReranker
 from myagent.rag.store import SQLiteDocumentStore
 from myagent.rag.types import Chunk, Document, RetrievedChunk
@@ -280,6 +281,35 @@ async def test_a_dead_vector_store_is_reported(tmp_path, store, embedder):
         await held.retrieve("anything")
 
 
+# --- recall: the agent-facing half of PLAN 6.5 ---------------------------------
+
+
+async def test_recall_returns_citable_context_items(tmp_path, store, embedder, vectorstore):
+    """``recall`` is ``retrieve`` with a citation instead of the whole chunk record."""
+    await build(store, embedder, vectorstore).ingest([write(tmp_path, "graphrag.txt", TEXT)])
+    held = build(store, embedder, vectorstore, settings=RagSettings(top_k=1))
+
+    items = await held.recall("knowledge graph retrieval")
+    hits = await held.retrieve("knowledge graph retrieval", top_k=1)
+
+    assert isinstance(held, DocumentProvider)
+    assert len(items) == 1
+    assert items[0].text == hits[0].chunk.text.strip()
+    assert items[0].score == hits[0].score
+    assert items[0].reference == citation_label(hits[0])
+    assert items[0].reference == f"{hits[0].chunk.id.replace(':', '#')} graphrag (no page)"
+
+
+async def test_recall_answers_nothing_when_rag_is_disabled(tmp_path, store, embedder, vectorstore):
+    """``MYAGENT_RAG_ENABLED=false``: one empty section, and the commands still work."""
+    await build(store, embedder, vectorstore).ingest([write(tmp_path, "a.txt", TEXT)])
+    held = build(store, embedder, vectorstore, settings=RagSettings(enabled=False))
+
+    assert await held.recall("the graph") == []
+    # The switch is narrower than that: ``myagent search`` keeps its documents.
+    assert await held.retrieve("the graph")
+
+
 def test_build_context_renders_one_citable_block_per_chunk():
     document = Document(
         id="abc123", source="papers/graphrag.pdf", text="", title="GraphRAG", metadata={}
@@ -319,6 +349,7 @@ def test_citation_names_the_page_and_falls_back_to_the_source():
     )
 
     assert citation(hit) == "[abc123#7] papers/x.pdf (no page)"
+    assert citation_label(hit) == "abc123#7 papers/x.pdf (no page)"
     assert citation(hit) == citation(hit)
 
 

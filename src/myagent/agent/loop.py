@@ -26,11 +26,12 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from myagent.agent.context import (
-    ContextBudgetExceeded,
     ContextBundle,
     ContextItem,
     ContextManager,
     ContextRequest,
+    ContextWindowExceeded,
+    DocumentProvider,
     MemoryProvider,
 )
 from myagent.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
@@ -129,6 +130,7 @@ class AgentLoop:
         runtime: AgentRuntimeConfig,
         bus: MessageBus | None = None,
         memory: MemoryProvider | None = None,
+        retriever: DocumentProvider | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
@@ -137,13 +139,27 @@ class AgentLoop:
         self.runtime = runtime
         self.bus = bus if bus is not None else MessageBus()
         self.memory = memory
+        self.retriever = retriever
         self.runner = AgentRunner()
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def run_once(self, user_input: str, session_key: str = DEFAULT_SESSION_KEY) -> str:
         """Process one message and return the answer (used by the CLI and tests)."""
+        return (await self.run_turn(user_input, session_key)).require_outbound().content
+
+    async def run_turn(
+        self, user_input: str, session_key: str = DEFAULT_SESSION_KEY
+    ) -> TurnContext:
+        """Process one message and return the whole turn.
+
+        ``run_once`` is the thin wrapper callers want; this one exists because
+        ``myagent chat --show-context`` has to look at the built bundle (PLAN 6's
+        transcript acceptance test), and re-deriving it outside the loop would
+        mean building the request twice — with a second ``ContextReport`` and a
+        second memory/RAG round trip.
+        """
         message = InboundMessage(session_key=session_key, content=user_input)
-        return (await self._process(message)).content
+        return await self._run_turn(message)
 
     async def run(self) -> None:
         """Consume the bus until it is closed."""
@@ -155,13 +171,17 @@ class AgentLoop:
 
     async def _process(self, message: InboundMessage) -> OutboundMessage:
         """Run the four stages under the session lock (serial per session, parallel across)."""
+        return (await self._run_turn(message)).require_outbound()
+
+    async def _run_turn(self, message: InboundMessage) -> TurnContext:
+        """The four stages, returning the whole :class:`TurnContext`."""
         async with self._session_lock(message.session_key):
             ctx = TurnContext(session_key=message.session_key, user_input=message.content)
             await self._run_stage(ctx, _STAGE_BUILD, self._build_turn)
-            await self._run_stage(ctx, _STAGE_RUN, self._run_turn)
+            await self._run_stage(ctx, _STAGE_RUN, self._run_turn_stage)
             await self._run_stage(ctx, _STAGE_SAVE, self._save_turn)
             await self._run_stage(ctx, _STAGE_RESPOND, self._prepare_outbound)
-            return ctx.require_outbound()
+            return ctx
 
     async def _build_turn(self, ctx: TurnContext) -> None:
         """Load the session and assemble the request messages."""
@@ -170,20 +190,23 @@ class AgentLoop:
             user_input=ctx.user_input,
             history=session.transcript(),
             memories=await self._recall_memories(ctx),
+            rag_chunks=await self._recall_documents(ctx),
             tools=self.tools.get_definitions(),
             session_key=ctx.session_key,
             budget_tokens=self.runtime.context_budget_tokens,
+            summary=session.summary,
         )
         try:
             ctx.bundle = self.context.build(request)
-        except ContextBudgetExceeded as exc:
-            # Phase 3 reports an over-budget request instead of trimming it.
-            # Aborting build (rather than raising out of the loop) keeps the
-            # turn ending in the respond stage, like any other failed turn.
+        except ContextWindowExceeded as exc:
+            # Phase 6 trims to fit, so this only fires when even the required
+            # sections do not fit. Aborting build (rather than raising out of the
+            # loop) keeps the turn ending in the respond stage, like any other
+            # failed turn, and the message says what to change.
             logger.warning("[turn %s] build stage aborted: %s", ctx.turn_id, exc)
             ctx.error = str(exc)
 
-    async def _run_turn(self, ctx: TurnContext) -> None:
+    async def _run_turn_stage(self, ctx: TurnContext) -> None:
         """Hand the messages to the runner."""
         if ctx.error is not None:
             return
@@ -234,6 +257,22 @@ class AgentLoop:
             return list(await self.memory.recall(ctx.user_input, session_key=ctx.session_key))
         except Exception as exc:
             logger.warning("[turn %s] memory recall failed: %s", ctx.turn_id, exc)
+            return []
+
+    async def _recall_documents(self, ctx: TurnContext) -> list[ContextItem]:
+        """Ask RAG for this turn's chunks (PLAN 6.5).
+
+        Same rule as memory recall: retrieval is an enhancement. A Qdrant or
+        embedding outage is logged and costs the turn its citations, never the
+        turn itself — ``MYAGENT_RAG_ENABLED=false`` is the deliberate version of
+        the same "no chunks this turn" answer.
+        """
+        if self.retriever is None:
+            return []
+        try:
+            return list(await self.retriever.recall(ctx.user_input))
+        except Exception as exc:
+            logger.warning("[turn %s] document recall failed: %s", ctx.turn_id, exc)
             return []
 
     async def _observe_turn(self, ctx: TurnContext, produced: Sequence[Message]) -> None:
