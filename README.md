@@ -16,7 +16,7 @@
 | Phase 2 | 核心代码迁移：Model / Tool / Runner / Loop 抽象 | ✅ 已完成 |
 | Phase 3 | Agent Framework 重构：模块职责与接口 | ✅ 已完成 |
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ✅ 已完成 |
-| Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ⬜ 未开始 |
+| Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ✅ 已完成 |
 | Phase 6 | Context Manager 重构：优先级与预算 | ⬜ 未开始 |
 | Phase 7 | 垂直领域 Agent | ⬜ 未开始 |
 | Phase 8 | Evaluation Pipeline | ⬜ 未开始 |
@@ -44,6 +44,12 @@ myagent chat                 # 交互模式：/exit 退出、/session 看会话 
 myagent tools                # 列出已注册工具（离线可用，不需要密钥）
 myagent memory list          # 看长期记忆（Phase 4；需要 Qdrant，见下方说明）
 myagent memory search "我的研究方向"
+
+# 5. 知识库（Phase 5）：摄取 → 检索 → 带引用的答案
+myagent ingest docs/*.md                    # 摄取（幂等；首次自动探测 EMBED_DIM 并写回 .env）
+myagent search "切分参数怎么定" -k 5         # 检索，输出 [文档id#块号] 引用
+myagent docs list                           # 知识库里有哪些文档
+myagent docs delete <document_id>           # 删一篇（向量 + 行一起删）
 ```
 
 Phase 3 之后的 Framework V2 可以独立运行，且**模块可替换、依赖可注入**：契约用 `Protocol`
@@ -58,6 +64,15 @@ collection（`myagent_memories`），`myagent chat` 每轮自动召回 + 自动�
 Qdrant 连不上时不会中断对话：召回降级为关键词搜索并给出提示。关闭开关用
 `MYAGENT_MEMORY_ENABLED=false`。细节见 [`docs/memory-design.md`](./docs/memory-design.md)
 与实验表 [`docs/records/phase-4-memory.md`](./docs/records/phase-4-memory.md)。
+
+Phase 5 的 **RAG 流水线**是一条独立于对话的命令行能力（上游 nanobot 没有这一块）：
+文件经 Loader → Chunker → Embedder 进入 Qdrant 的 `myagent_documents` collection，
+原文与块号存 SQLite；`myagent search` 检索后给每个块附上 `[文档id#块号]` 引用，
+`RagPipeline.build_context()` 把命中块拼成模型可以直接引用的上下文。
+默认切分 800 字符 / 重叠 120 字符（400/800/1200 的实验见 ADR-0009）；
+`EMBED_DIM` 留空时首次 ingest 会用一次真实调用探测维度并写回 `.env`。
+细节见 [`docs/rag-design.md`](./docs/rag-design.md)
+与实验表 [`docs/records/phase-5-rag.md`](./docs/records/phase-5-rag.md)。
 
 > 如果 `myagent` 报 `ModuleNotFoundError: No module named 'myagent'`：本机 `.venv` 里的 `.pth`
 > 被 macOS 打上了 `hidden` 标志，Python 的 `site` 会读不到它。执行 `chflags -R nohidden .venv`
@@ -90,12 +105,12 @@ kyobot/
 │   ├── tools/                  # BaseTool 协议 / schema 校验 / Registry / builtin 四个工具
 │   ├── session/                # SessionStore 契约 + JSONL 实现（追加式 + last_archived）
 │   ├── memory/                 # 分层记忆：types / sqlite_store / vector_index / extractor / retriever / consolidator
-│   ├── rag/                    # 检索契约与数据类型（Phase 5 实现）
-│   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding）
+│   ├── rag/                    # 端到端 RAG：loader / chunker / embedder / vectorstore / store / retriever / reranker / pipeline
+│   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding / Memory / RAG）
 │   ├── observability/          # 日志等可观测性基础件
 │   ├── tokens.py               # 全框架共用的 token 估算
-│   └── cli.py                  # myagent chat / myagent tools（只调用 build_agent）
-├── tests/                      # pytest 测试（442 项，覆盖率 100%）
+│   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs（只调用 build_*）
+├── tests/                      # pytest 测试（591 项，覆盖率 100%；tests/rag/ 全部离线）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
 │   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
@@ -105,10 +120,11 @@ kyobot/
 │   ├── context.md              # 上下文组装 / 预算 / 压缩
 │   ├── memory.md               # Session vs Memory / 归档 / Dream
 │   ├── memory-design.md        # 分层记忆：分层表 / 存储 / 写入策略 / 检索 / 巩固（Phase 4）
+│   ├── rag-design.md           # RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 引用（Phase 5）
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
 │   └── records/                # 阶段工作记录
-├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py
+├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py / rag_experiment.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 ├── data/                       # 本地运行状态：会话 JSONL + 记忆 SQLite（git 忽略）
 └── nanobot/                    # 上游只读参照，不参与构建（git ignored）
@@ -119,7 +135,8 @@ kyobot/
 | 层 | 选型 | 决策记录 |
 | --- | --- | --- |
 | 文档与元数据存储 | SQLite（`sqlite3`，单文件，可上 FTS5 做混合检索） | ADR-0003 |
-| 向量存储 | Qdrant（HNSW + payload 过滤，本地 docker / 云端同一套配置） | ADR-0003 |
+| 向量存储 | Qdrant（HNSW + payload 过滤，本地 docker / 云端同一套配置）；文档与记忆各一个 collection | ADR-0003、ADR-0008 |
+| PDF 文本层 | `pypdf`（只用于 `rag/loader.py` 的 `PdfLoader`；不做 OCR） | ADR-0009 |
 | Embedding | 阿里云 DashScope（`qwen3.7-text-embedding-flash`，OpenAI 兼容模式） | ADR-0005 |
 | 配置与密钥 | `.env` + `python-dotenv` 的 `load_dotenv()`，环境变量优先 | ADR-0004 |
 | Agent Runtime | 自研（对照 nanobot 的 Loop / Runner 拆分重新抽象） | ADR-0001、ADR-0002 |
@@ -150,8 +167,15 @@ kyobot/
 - [`docs/decision-records/0008-layered-memory.md`](./docs/decision-records/0008-layered-memory.md)：为什么记忆单独一个 collection、为什么「LLM 提议 + 代码裁决」、为什么衰减只给 Episodic、巩固游标为什么只有成功才前移。
 - [`docs/records/phase-4-memory.md`](./docs/records/phase-4-memory.md)：Phase 4 工作记录（五张实验表、跨 Session 验收、质量门，以及 Qdrant id 归一化等四个真实问题）。
 
+**RAG（Phase 5 产出）**
+
+- [`docs/rag-design.md`](./docs/rag-design.md)：两段流水线（摄取 / 检索）、四类数据类型、SQLite 表与 Qdrant payload、维度探测、引用格式、与 Phase 4 记忆的边界、已知限制。
+- [`docs/decision-records/0009-chunking-and-retrieval.md`](./docs/decision-records/0009-chunking-and-retrieval.md)：为什么默认 800/120、为什么 `top_k=5`、为什么本阶段不引入模型型 reranker、为什么 `pypdf` 成为运行依赖。
+- [`docs/records/phase-5-rag.md`](./docs/records/phase-5-rag.md)：Phase 5 工作记录（chunk size 实验、reranker 对比、RAG OFF/ON、真实服务冒烟与质量门）。
+- [`scripts/rag_experiment.py`](./scripts/rag_experiment.py)：跑出上面三张表的实验脚本（`--offline` 只跑关键词行）。
+
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 865 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 957 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 

@@ -505,7 +505,7 @@ OpenAICompatModel   → base_url 指向 DashScope 兼容端点（LLM_BASE_URL）
       → `src/myagent/tools/base.py:220`、`src/myagent/agent/types.py:30`（`parse_error` 承载解析失败）
 * [x] Settings（`LLMSettings`：`LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL` /
       `LLM_MAX_TOKENS` / `LLM_CONTEXT_WINDOW` / `AGENT_MAX_ITERATIONS`，沿用 `myagent.config` 的单入口风格）
-      → `src/myagent/config/settings.py:376`（`LLMSettings`）、`:339`（`AgentSettings`）
+      → `src/myagent/config/settings.py:463`（`LLMSettings`）、`:544`（`AgentSettings`）
 * [x] `tests/test_models.py`：用假客户端验证请求形状、tool_calls 解析、错误映射（不打真实网络）
       → 382 行，覆盖请求形状、tool_calls 解析与 8 类错误映射
 
@@ -842,11 +842,11 @@ class ContextManager(Protocol):
 
 * [x] Protocol 就近定义在各模块（或汇总到 `myagent/protocols.py`），保持「换一行 import 就能替换实现」
       → 六个契约分别在 `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、
-      `src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:15`、
-      `src/myagent/rag/vectorstore.py:19`、`src/myagent/rag/retriever.py:19`；
+      `src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:74`、
+      `src/myagent/rag/vectorstore.py:63`、`src/myagent/rag/retriever.py:43`；
       **没有**建 `protocols.py`（理由见 ADR-0007「备选方案」）
 * [x] 装配只发生在 `myagent/runtime.py::build_agent(config)` 一处（见 3.5）
-      → `src/myagent/runtime.py:38`；`tests/test_contracts.py:446` 断言三个具体实现只在
+      → `src/myagent/runtime.py:41`；`tests/test_contracts.py:446` 断言三个具体实现只在
       `myagent.runtime` 的 import 里出现
 * [x] 决策记 **ADR-0007**：扩展点用 `Protocol` + 装配注入，而不是 `isinstance` 分支或继承抽象基类
       → `docs/decision-records/0007-framework-extension-points.md`
@@ -875,10 +875,10 @@ Settings（.env）
 ```
 
 * [x] 复用 Phase 0/2 的配置单入口（`src/myagent/config/settings.py`）；组件**只接收 settings 对象，不读环境变量**
-      → `Settings`（`src/myagent/config/settings.py:506`，`from_env()` 在 `:404`）；默认组件的构造
-      见 `src/myagent/runtime.py:53`（模型）、`:54`（工具）、`:57`（上下文）、`:60`（会话）、`:63`（运行参数）
+      → `Settings`（`src/myagent/config/settings.py:593`，`from_env()` 在 `:611`）；默认组件的构造
+      见 `src/myagent/runtime.py:68`（会话）、`:72`（工具）、`:75`（上下文）、`:79`（运行参数）
 * [x] CLI 只调用 `build_agent()`，不手工 new 组件
-      → `src/myagent/cli.py:227`（chat）、`:64`（tools）；Phase 2 的 `build_agent_loop()` 已删除
+      → `src/myagent/cli.py:358`（chat）、`:339`（tools）；Phase 2 的 `build_agent_loop()` 已删除
 
 ## 阶段产出
 
@@ -950,7 +950,7 @@ tests/
 1. **可替换是可执行的事实**：`tests/test_contracts.py` 用「六个契约的结构类型断言 + 不继承任何
    东西的假件跑通链路 + AST 检查核心模块的 import」三层把这条边界固定下来——任何一次
    「核心 import 具体实现」都会立刻失败，而不是等评审发现。
-2. **装配收敛到一处**：`build_agent()`（`src/myagent/runtime.py:38`）是唯一知道实现类的地方，
+2. **装配收敛到一处**：`build_agent()`（`src/myagent/runtime.py:41`）是唯一知道实现类的地方，
    CLI 只调用它；Phase 2 记录里的遗留项「装配仍在 `cli.build_agent_loop()`」到此清账。
 3. **重构没有改变运行时语义**：真实 transcript（`docs/records/phase-3-refactor.md` §7.2）里
    「一次模型请求 → 3 个只读工具并发 → 一次回答」、第二轮复用历史得到 120，与 Phase 2 一致。
@@ -1183,8 +1183,8 @@ Qdrant payload 与过滤、写入策略的「写/不写」清单、与上游 Dre
 - `FileMemoryStore` 已删除：JSONL + 字面量检索被 SQLite + Qdrant 取代，
   `BaseMemory` 从 4 个方法长到 8 个（多了 `get` / `count` / `forget` / `add_many`）；
 - 新增 `memory/embedder.py`：PLAN 4.5 只写了「embed」，但 Phase 4 需要一条现在就能跑的
-  embedding 路径；`OpenAICompatEmbedder` 实现 `src/myagent/rag/embedder.py:15` 的 `BaseEmbedder` 契约，
-  Phase 5 的文档向量可以直接复用它。
+  embedding 路径；`OpenAICompatEmbedder` 实现 `src/myagent/rag/embedder.py:74` 的 `BaseEmbedder` 契约，
+  Phase 5 的文档向量可以直接复用它（Phase 5 把这条路径搬到了 `src/myagent/rag/embedder.py`）。
 
 ## 验收标准
 
@@ -1287,7 +1287,8 @@ chunks(id TEXT PK, document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
 ```
 
 * `sha256 UNIQUE` 是幂等 ingest 的关键：同一文件重复上传只更新 `source`，不重复建 chunk
-* [ ] `tests/rag/test_store.py`：重复 ingest 后 documents/chunks 行数不变
+* [x] `tests/rag/test_store.py`：重复 ingest 后 documents/chunks 行数不变
+      → `tests/rag/test_store.py:203`（行数不变）、`tests/rag/test_pipeline.py:77`（点 id 与块 id 都不变）
 
 ## 5.2 Loader
 
@@ -1304,7 +1305,9 @@ class BaseLoader(Protocol):
 | `PdfLoader` | `.pdf` | `pypdf`（本阶段新增依赖，记 ADR-0009） |
 
 * 明确不做：OCR、扫描件、表格结构化、公式抽取（列为 non-goal，避免范围膨胀）
-* [ ] `tests/rag/fixtures/mini.pdf` 放一个 2 页小 PDF；测试只读本地 fixture，不打网络
+* [x] `tests/rag/fixtures/mini.pdf` 放一个 2 页小 PDF；测试只读本地 fixture，不打网络
+      → `tests/rag/fixtures/mini.pdf`（999 B，2 页，标题 `MyAgent RAG fixture`），
+      由 `tests/rag/pdf_fixture.py:90` 现场生成；`tests/rag/test_loader.py:132` 覆盖（断言二进制与生成器一致）
 
 ## 5.3 Chunker
 
@@ -1317,7 +1320,10 @@ class BaseChunker(Protocol):
   让 chunk 尽量落在语义边界上
 * 预留 `RecursiveChunker`（`\n\n` → `\n` → `。` → 字符）与中文标点处理
 * chunk 的 `metadata.token_estimate` 用统一估算函数，Phase 6 的预算直接复用
-* [ ] 参数实验（Phase 8 复盘）：size = 400 / 800 / 1200 的 hit@5 与平均 chunk 长度
+* [x] 参数实验（Phase 8 复盘）：size = 400 / 800 / 1200 的 hit@5 与平均 chunk 长度
+      → `scripts/rag_experiment.py`，结果 `docs/records/phase-5-rag.md` §6.1
+      （三档 hit@5 都是 8/8；平均命中位次 1.00 / 1.38 / 1.62；块数 421 / 216 / 144）；
+      默认值由 ADR-0009 定为 800/120（`src/myagent/config/settings.py:136`）
 
 ## 5.4 Embedder
 
@@ -1334,7 +1340,10 @@ class BaseEmbedder(Protocol):
 * 维度：`EMBED_DIM` 留空时，首次 ingest 用一次真实调用探测 `len(vector)`，把结果记进
   `.env`（`EMBED_DIM`）与 phase 记录；**Qdrant collection 的 dim 必须等于探测值**
 * 批量与重试：单次最多 `EMBED_BATCH_SIZE`（默认 16）条，失败按指数退避重试 3 次
-* [ ] 归一化默认开启（cosine 等价于点积）；维度不一致时抛可读错误
+* [x] 归一化默认开启（cosine 等价于点积）；维度不一致时抛可读错误
+      → `src/myagent/rag/embedder.py:207`、`:231`（`normalize=True`）、`src/myagent/rag/embedder.py:91`；
+      维度不一致两处拦截：`src/myagent/rag/pipeline.py:191`（配置 vs 模型）、
+      `src/myagent/rag/vectorstore.py:115`（模型 vs 已有集合）
 
 ## 5.5 VectorStore
 
@@ -1415,19 +1424,59 @@ tests/rag/{test_loader,test_chunker,test_store,test_pipeline}.py
 tests/rag/fixtures/mini.pdf
 ```
 
+结果（2026-09-22）：全部落地，另加三个 PLAN 没点名但被 800/120 的默认值牵出来的文件——
+`scripts/rag_experiment.py`（实验脚本）、`tests/rag/{test_embedder,test_vectorstore,test_retriever,test_reranker}.py`
+（每个契约一个测试文件）、`tests/rag/pdf_fixture.py`（现场生成 fixture）。
+
+```text
+src/myagent/rag/    9 个文件 1998 行（含 __init__ 的 re-export）
+tests/rag/          8 个测试文件 + 1 个 fixture 辅助模块（108 项测试，全部离线）
+```
+
 ## 验收标准
 
 ```text
 上传 PDF → 建立知识库 → 提出问题 → 检索相关内容 → LLM 回答
 ```
 
-* [ ] `myagent ingest data/papers/x.pdf` 后 `myagent search "..."` 返回带 `document_id#index` 的来源
-* [ ] 端到端：检索结果经 `build_context()` 注入，回答能引用到具体 chunk（引用可信、可回跳原文）
-* [ ] 幂等：同一文件 ingest 两次，`documents` / `chunks` 行数与 Qdrant point 数不变
-* [ ] 维度探测：`EMBED_DIM` 留空 → 首次 ingest 自动探测 → collection 建立成功，且 `myagent config check` 报出维度
-* [ ] 离线测试：`pytest -m "not smoke"` 不发起任何网络请求（假 embedder + 内存向量库）
-* [ ] 实验表（进 `docs/records/phase-5-rag.md`）：chunk size 400/800/1200 的 hit@5、平均 chunk 长度、
+* [x] `myagent ingest data/papers/x.pdf` 后 `myagent search "..."` 返回带 `document_id#index` 的来源
+      → 真实服务冒烟：`myagent ingest docs/development.md docs/memory-design.md` →
+      `myagent search "提交信息的格式约定是什么？" -k 2` 返回
+      `[a8361ccbbb4d80a2#8] 开发规范 (no page) score=0.375`（`docs/records/phase-5-rag.md` §6.4）
+* [x] 端到端：检索结果经 `build_context()` 注入，回答能引用到具体 chunk（引用可信、可回跳原文）
+      → 同一冒烟里模型回答末尾引用 `[a8361ccbbb4d80a2#8]`，该 id 能在 `myagent docs list` 里查到
+* [x] 幂等：同一文件 ingest 两次，`documents` / `chunks` 行数与 Qdrant point 数不变
+      → 第二次 ingest 报 `0 added, 2 updated, 37 chunk(s) total`，Qdrant 里仍是 37 个点
+      （37 = 11 + 26）；`tests/rag/test_pipeline.py:77` 断言点 id 与块 id 都可重复
+* [x] 维度探测：`EMBED_DIM` 留空 → 首次 ingest 自动探测 → collection 建立成功
+      → 真实冒烟打印 `embedding dim=1024 (probed, written to .env)`，并把 `EMBED_DIM=1024`
+      写进 `.env`（`src/myagent/config/env.py:124`）。**`myagent config check` 不在本阶段**：
+      它是 §9.2 的产物，PLAN 5.4 的这一句当时按未实现的自检命令写；Phase 5 用 ingest 的输出行
+      与 `myagent docs list` 验收（`docs/records/phase-5-rag.md` §7 记录了这个偏差）
+* [x] 离线测试：`pytest -m "not smoke"` 不发起任何网络请求（假 embedder + 内存向量库）
+      → `tests/fakes.py:105` 的 `BagOfWordsEmbedder` + `tests/fakes.py:183` 的 `DictionaryVectorStore`；
+      整套测试在**无网络**的沙箱里跑绿（591 项）
+* [x] 实验表（进 `docs/records/phase-5-rag.md`）：chunk size 400/800/1200 的 hit@5、平均 chunk 长度、
       检索延迟，以及「RAG OFF vs RAG ON」的定性对比
+      → §6.1（chunk size）、§6.2（reranker）、§6.3（RAG OFF vs ON）
+
+结论（证据见 `docs/records/phase-5-rag.md` §6～§8）：
+
+1. **两段流水线都幂等**：内容寻址（sha256 前 16 位）+ `sha256 UNIQUE` + uuid5 派生点 id，
+   同一文件两次 ingest 后 `documents` / `chunks` 行数与 Qdrant 点数都不变
+   （真实服务上是 `0 added, 2 updated, 37 chunk(s) total`，点数仍是 37）；
+2. **块大小有数据支撑**：400 / 800 / 1200 三档 hit@5 都是 8/8，判别力落在平均命中位次
+   （1.00 / 1.38 / 1.62）上；400 的位次最好但向量数翻倍（421 vs 216），
+   因此 800/120 是折中而不是「最优」（ADR-0009）；
+3. **重排的两个实现完全等价**：`IdentityReranker` 与 `ScoreReranker` 的 hit@5 与平均位次一致
+   （8/8、1.38），重排自身只花 0.03–0.05 ms，端到端 ~100 ms 由 query 嵌入主导——
+   「重排要有第二个信号才值得」，模型型 reranker 的引入条件写进 ADR-0009、留给 Phase 8；
+4. **引用可回跳**：`build_context` 的每个块都以 `[文档id#块号]` 开头，真实冒烟里模型回答
+   引用 `[a8361ccbbb4d80a2#8]`，该 id 能在 `myagent docs list` 查到；
+5. **维度探测可自愈**：`EMBED_DIM` 留空时首次 ingest 探测到 1024 并写回 `.env`，
+   collection 按同一维度建立；配置与模型、模型与已有集合两处不一致都会抛出可读错误。
+
+记录：`docs/records/phase-5-rag.md`
 
 ---
 

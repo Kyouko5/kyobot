@@ -4,7 +4,7 @@
 - 关联文档：[`docs/memory.md`](./memory.md)（上游 nanobot 的记忆机制）、
   [`docs/decision-records/0008-layered-memory.md`](./decision-records/0008-layered-memory.md)（决策）、
   [`docs/records/phase-4-memory.md`](./records/phase-4-memory.md)（实验与质量门）
-- 代码入口：`src/myagent/memory/`（13 个文件 2284 行）；装配点 `src/myagent/runtime.py:84`（`build_memory`）
+- 代码入口：`src/myagent/memory/`（13 个文件 2284 行）；装配点 `src/myagent/runtime.py:87`（`build_memory`）
 
 ## 0. 一句话
 
@@ -133,7 +133,7 @@ memory_vectors(                    -- 向量落库状态：避免重复 embeddin
 - **独立 collection**：`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`
   （`src/myagent/config/settings.py:146`），与文档向量的 `myagent_documents` 分开。
   原因见 ADR-0008：记忆按 id 删除、文档整篇重灌，混在一起会让一次清理误伤另一类数据。
-  `QdrantSettings.__post_init__` 在两者相等时直接抛 `ValueError`（`src/myagent/config/settings.py:159`）。
+  `QdrantSettings.__post_init__` 在两者相等时直接抛 `ValueError`（`src/myagent/config/settings.py:180`）。
 - **payload 只有四个字段**（`src/myagent/memory/vector_index.py:198`）：
 
   ```json
@@ -207,7 +207,7 @@ memory_vectors(                    -- 向量落库状态：避免重复 embeddin
 ```text
 query
  ├─ 短 query（≤8 字符）且 kind=semantic？ → 先走关键词（embedding 对「RAG？」这种短句不敏感）
- ├─ embed（复用 Phase 3 的 BaseEmbedder，src/myagent/rag/embedder.py:15）
+ ├─ embed（复用 Phase 3 的 BaseEmbedder；传输层在 Phase 5 搬到 src/myagent/rag/embedder.py:74）
  ├─ Qdrant search(filter=kind, top_k=5)
  ├─ 时间衰减重排：score = cosine × 0.5 ** (age_days / half_life_days)（只作用于 episodic）
  └─ 向量没找到 → 关键词兜底
@@ -217,7 +217,7 @@ query
 
 | 行为 | 说明 | 位置 |
 | --- | --- | --- |
-| 衰减只作用于 Episodic | Semantic 是"我知道什么"，不该被时间吃掉；`decay()` 对非 episodic 返回 `1.0` | `src/myagent/memory/retriever.py:126` |
+| 衰减只作用于 Episodic | Semantic 是"我知道什么"，不该被时间吃掉；`decay()` 对非 episodic 返回 `1.0` | `src/myagent/memory/retriever.py:125` |
 | 命中都带 `memory_id` | 返回的 `record` 是从 SQLite 重新读出来的（`src/myagent/memory/retriever.py:145`），所以"点还在、记录已删"的陈旧向量不会漏进答案；Phase 8 用 `MemoryContext.ids` 算 hit@k | `src/myagent/memory/retriever.py:145` |
 | 失败降级，不抛异常 | Qdrant 或 embedding 任意一个失败 → `degraded=True` + 可读 `note` + 关键词结果；`src/myagent/agent/loop.py:224` 的 `_recall_memories` 还会把异常兜成"这轮没有记忆" | `src/myagent/memory/retriever.py:79` |
 | 同分按新→旧 | 排序键是 `(-score, -created_at)`，衰减之后的并列取更新的那条 | `src/myagent/memory/retriever.py:145` |
@@ -256,9 +256,9 @@ query
 ## 7. 装配：谁在什么时候调用记忆
 
 ```text
-myagent chat ──▶ src/myagent/runtime.py:38 build_agent
-                     └─ memory=build_memory(...)（src/myagent/runtime.py:84）
-myagent memory … ─▶ src/myagent/runtime.py:84 build_memory（只要记忆，不要 Loop）
+myagent chat ──▶ src/myagent/runtime.py:41 build_agent
+                     └─ memory=build_memory(...)（src/myagent/runtime.py:87）
+myagent memory … ─▶ src/myagent/runtime.py:87 build_memory（只要记忆，不要 Loop）
 
 AgentLoop（src/myagent/agent/loop.py:131 收 memory）
  ├─ build 阶段：_recall_memories（src/myagent/agent/loop.py:224）→ MemoryManager.recall → ContextRequest.memories
@@ -271,7 +271,7 @@ AgentLoop（src/myagent/agent/loop.py:131 收 memory）
 两个方向都失败即降级（`src/myagent/agent/loop.py:224`、`:239` 里 `except Exception` → warning），
 因为"记忆"是增强项：Qdrant 挂掉应该损失上下文质量，而不是让这一轮对话失败。
 
-### 7.1 配置项（`src/myagent/config/settings.py:253`）
+### 7.1 配置项（`src/myagent/config/settings.py:280`）
 
 | 环境变量 | 默认 | 作用 |
 | --- | --- | --- |

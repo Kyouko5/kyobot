@@ -37,7 +37,7 @@ import（`tests/test_contracts.py:435`）、用不继承任何东西的假件驱
 ```text
                     ┌──────────────────────────────────────────────┐
    用户 / CLI ──────▶│ runtime.build_agent(settings)                │  唯一装配点
-                    │ src/myagent/runtime.py:38                    │
+                    │ src/myagent/runtime.py:41                    │
                     └───────────────────┬──────────────────────────┘
                                         │ Settings（.env）→ 具体实现
                                         ▼
@@ -73,9 +73,13 @@ session.manager       → session.base(协议), agent.types, config.settings
 models.openai_compat  → models.base(协议), agent.types, config.settings, openai(SDK)
 tools.registry        → tools.base(协议)
 memory.*              → memory.types / memory.base（契约与数据类型）+ Phase 4 的实现
-                        （sqlite_store / vector_index / embedder / working / episodic /
-                        semantic / retriever / extractor / consolidator / manager）
-rag.*                 → 只定义契约与数据类型（Phase 5 才接线）
+                        （sqlite_store / vector_index / working / episodic / semantic /
+                        retriever / extractor / consolidator / manager）；嵌入传输层在
+                        Phase 5 搬到 rag.embedder，所以 memory 也 import rag.embedder
+rag.*                 → rag.types / rag.loader / rag.chunker / rag.embedder /
+                        rag.vectorstore / rag.store / rag.retriever / rag.reranker /
+                        rag.pipeline（Phase 5 的端到端实现）；
+                        qdrant_client 只在 vectorstore，openai 只在 embedder
 ```
 
 三条硬约束：
@@ -110,7 +114,7 @@ rag.*                 → 只定义契约与数据类型（Phase 5 才接线）
 | `session/base.py` | 会话契约：转录 + 压缩边界 | `Session` `SessionStore` `DEFAULT_SESSION_KEY` | `session/manager.py:344` 的 `get_history` |
 | `session/manager.py` | JSONL 实现 | `JsonlSessionStore` | `session/manager.py:JsonlSessionStore` |
 | `agent/loop.py` | 一轮对话的 4 阶段 + 会话锁 + 最小 Bus | `AgentLoop` `TurnContext` `MessageBus` | `agent/loop.py:AgentLoop`（7 阶段） |
-| `rag/` | 检索契约与数据类型（未接线） | `BaseEmbedder` `BaseVectorStore` `BaseRetriever` `Document` `Chunk` | `rag/`（Phase 5 实现） |
+| `rag/` | 端到端 RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 编排与引用 | `RagPipeline` `FixedSizeChunker` `QdrantVectorStore` `VectorRetriever` `Document` `Chunk` | **上游没有**（无检索能力，纯增量） |
 | `memory/` | 四层记忆：SQLite 记录 + Qdrant 向量 + 写入策略 + 巩固 | `MemoryRecord` `BaseMemory` `MemoryManager` `SQLiteMemoryStore` `QdrantMemoryIndex` | `agent/memory.py`（`MEMORY.md` 与 Dream） |
 | `tokens.py` | 全框架共用的 token 估算 | `estimate_tokens` | `utils/token_counter.py` |
 | `runtime.py` | **唯一装配点** | `build_agent` | `cli/agent.py` + `agent/loop.py:_register_default_tools` |
@@ -121,10 +125,10 @@ rag.*                 → 只定义契约与数据类型（Phase 5 才接线）
 ```text
 myagent chat -m "算一下 (12+8)*3，再读一下 workspace/project-notes.md"
   │
-  │ cli._chat()                                   src/myagent/cli.py:218
-  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:221
-  │  └ loop = build_agent()                         src/myagent/cli.py:227
-  │     asyncio.run(loop.run_once(text, session_key))     src/myagent/cli.py:229
+  │ cli._chat()                                   src/myagent/cli.py:349
+  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:352
+  │  └ loop = build_agent()                         src/myagent/cli.py:358
+  │     asyncio.run(loop.run_once(text, session_key))     src/myagent/cli.py:391
   ▼
 AgentLoop._process()                             src/myagent/agent/loop.py:156
   │  async with self._session_lock(session_key):       ← 会话内串行（:247）
@@ -208,9 +212,9 @@ AgentLoop._process()                             src/myagent/agent/loop.py:156
 | `BaseModel` | `src/myagent/models/base.py:71` | `generate(messages, tools) -> LLMResponse` | `OpenAICompatModel` |
 | `BaseTool` | `src/myagent/tools/base.py:152` | `execute(**kwargs) -> ToolResult` | 内置工具（上游契约参照 `agent/tools/base.py:159`） |
 | `BaseMemory` | `src/myagent/memory/base.py:30` | `add` / `add_many` / `get` / `all` / `count` / `search` / `forget` / `clear` | `SQLiteMemoryStore`（Phase 4） |
-| `BaseEmbedder` | `src/myagent/rag/embedder.py:15` | `embed(texts) -> list[list[float]]` | `DashScopeEmbedder`（Phase 5） |
-| `BaseVectorStore` | `src/myagent/rag/vectorstore.py:19` | `upsert(...)` / `search(vector, top_k, filters)` | `QdrantVectorStore`（Phase 5） |
-| `BaseRetriever` | `src/myagent/rag/retriever.py:19` | `retrieve(query, top_k, filters) -> list[RetrievedChunk]` | `VectorRetriever`（Phase 5） |
+| `BaseEmbedder` | `src/myagent/rag/embedder.py:74` | `embed(texts) -> list[list[float]]` | `DashScopeEmbedder`（Phase 5） |
+| `BaseVectorStore` | `src/myagent/rag/vectorstore.py:63` | `upsert(...)` / `search(vector, top_k, filters)` | `QdrantVectorStore`（Phase 5） |
+| `BaseRetriever` | `src/myagent/rag/retriever.py:43` | `retrieve(query, top_k, filters) -> list[RetrievedChunk]` | `VectorRetriever`（Phase 5） |
 
 加上 Loop 自己还要的三个边界（同一条决策，一并记在 ADR-0007）：
 
@@ -252,18 +256,18 @@ class BaseMemory(Protocol):                    # src/myagent/memory/base.py:30
     def forget(self, memory_id: str) -> bool: ...
     def clear(self) -> None: ...
 
-class BaseEmbedder(Protocol):                  # src/myagent/rag/embedder.py:15
+class BaseEmbedder(Protocol):                  # src/myagent/rag/embedder.py:74
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
     @property
     def dim(self) -> int: ...
 
-class BaseVectorStore(Protocol):               # src/myagent/rag/vectorstore.py:19
+class BaseVectorStore(Protocol):               # src/myagent/rag/vectorstore.py:63
     def ensure_collection(self, dim: int) -> None: ...
     def upsert(self, chunks: list[Chunk], vectors: list[list[float]]) -> None: ...
     def search(self, vector: list[float], top_k: int, filters: Filter | None = None) -> list[ScoredPoint]: ...
     def delete_document(self, document_id: str) -> None: ...
 
-class BaseRetriever(Protocol):                 # src/myagent/rag/retriever.py:19
+class BaseRetriever(Protocol):                 # src/myagent/rag/retriever.py:43
     async def retrieve(
         self, query: str, top_k: int = 5, *, document_ids: list[str] | None = None
     ) -> list[RetrievedChunk]: ...
@@ -563,42 +567,58 @@ MemoryManager        # src/myagent/memory/manager.py:58   门面：write / recal
 细节（分层、写入策略、检索、巩固、与上游 Dream 的对照）见
 [`docs/memory-design.md`](./memory-design.md)。
 
-### 3.11 rag/：Phase 5 的四个接口，本阶段只有类型
+### 3.11 rag/：Phase 5 的端到端 RAG（上游没有这一块）
 
-`src/myagent/rag/` 今天只有契约与数据类型，没有实现，也没有任何第三方依赖：
+Phase 3 只立了三个契约（`BaseEmbedder` / `BaseVectorStore` / `BaseRetriever`）；
+**Phase 5 把它实现成一条能跑的流水线**，并补上三个新契约：
 
-| 文件 | 内容 | Phase 5 的默认实现 |
-| --- | --- | --- |
-| `src/myagent/rag/types.py:26` | `Document` / `Chunk`（:37）/ `ScoredPoint`（:48）/ `RetrievedChunk`（:57）/ `Filter`（:22） | — |
-| `src/myagent/rag/embedder.py:15` | `BaseEmbedder.embed` / `.dim` | `DashScopeEmbedder`（ADR-0005） |
-| `src/myagent/rag/vectorstore.py:19` | `BaseVectorStore.ensure_collection` / `upsert` / `search` / `delete_document` | `QdrantVectorStore`（ADR-0003） |
-| `src/myagent/rag/retriever.py:19` | `BaseRetriever.retrieve(query, top_k, document_ids=...)` | `VectorRetriever` |
+```text
+RagPipeline            # src/myagent/rag/pipeline.py:101  ingest / retrieve / build_context / documents / delete
+├─ BaseLoader          # src/myagent/rag/loader.py:71   Text / Markdown / Pdf（pypdf）
+├─ BaseChunker         # src/myagent/rag/chunker.py:46  FixedSizeChunker(800, 120)
+├─ BaseEmbedder        # src/myagent/rag/embedder.py:74 OpenAICompat+DashScope / OpenAI（批量 16、重试 3）
+├─ BaseVectorStore     # src/myagent/rag/vectorstore.py:63 QdrantVectorStore（payload + 派生点 id）
+├─ BaseRetriever       # src/myagent/rag/retriever.py:43 VectorRetriever（命中回 SQLite 解析）
+├─ BaseReranker        # src/myagent/rag/reranker.py:29  Identity / Score（默认 Identity）
+├─ SQLiteDocumentStore # src/myagent/rag/store.py:85    documents + chunks（sha256 UNIQUE）
+└─ RagSettings         # src/myagent/config/settings.py:354 chunk_size / chunk_overlap / top_k
+```
 
-`Filter` 是 `Mapping[str, Any]`（`src/myagent/rag/types.py:22`）而不是 Qdrant 的 `Filter` 类型：
-这样契约文件不需要 import `qdrant_client`，「核心不 import SDK」的约束（§1）才守得住。
-`RetrievedChunk.score` 与 `chunk.id` 写进契约的原因是 Phase 8 用这两个字段算 `hit@k`。
+三件与 Phase 3 不同的事：
+
+1. `BaseEmbedder` 的传输层实现从 `memory/embedder.py` **搬到 `rag/embedder.py`**
+   （嵌入能力属于 RAG，记忆只是使用者），依赖方向成为 `memory → rag`；
+2. 契约里多了 `BaseLoader` / `BaseChunker` / `BaseReranker`，`Filter` 仍是
+   `Mapping[str, Any]`（`src/myagent/rag/types.py:46`）而不是 Qdrant 的 `Filter`——
+   契约文件不 import `qdrant_client`，「核心不 import SDK」的约束（§1）才守得住；
+3. `RetrievedChunk.score` 与 `chunk.id` 留在契约里的原因不变：Phase 8 用这两个字段算 `hit@k`。
+
+装配与 CLI 在 `build_rag`（`src/myagent/runtime.py:117`）与
+`myagent ingest|search|docs`（`src/myagent/cli.py:120`）。
+细节见 [`docs/rag-design.md`](./rag-design.md)，实验与默认值的由来见 ADR-0009。
 
 ### 3.12 config 与 CLI
 
-- **`Settings`（`src/myagent/config/settings.py:506`）是配置的唯一样本**：
-  `llm`（`LLMSettings`，:258）/ `agent`（`AgentSettings`，:339）/ `sqlite`（:97）/
-  `qdrant`（:111）/ `embedding`（:150），`Settings.from_env()`（:404）一次读完 `.env`。
+- **`Settings`（`src/myagent/config/settings.py:593`）是配置的唯一样本**：
+  `llm`（`LLMSettings`，:463）/ `agent`（`AgentSettings`，:544）/ `sqlite`（:142）/
+  `qdrant`（:156）/ `embedding`（:213）/ `rag`（`RagSettings`，:354），
+  `Settings.from_env()`（:611）一次读完 `.env`。
 - 组件**只接收 settings 对象，不读环境变量**：`OpenAICompatModel(settings.llm)`、
   `JsonlSessionStore.from_settings(settings.agent)`、
   `build_default_registry(settings.agent)`、`AgentRuntimeConfig.from_settings(agent, llm)`。
-- `LLMSettings.from_env()` 只校验形状，**不要求** model/key 存在（:295）；
-  `require_model()` / `require_api_key()`（:321、:327）在真正要发请求时才失败——
+- `LLMSettings.from_env()` 只校验形状，**不要求** model/key 存在（`src/myagent/config/settings.py:500`）；
+  `require_model()` / `require_api_key()`（`src/myagent/config/settings.py:526`、`:532`）在真正要发请求时才失败——
   这样 `myagent tools` 这类离线命令照常可用。
 - `myagent chat -m "..."` / `myagent chat`（交互：`/exit`、`/session`、`/clear`）/
-  `myagent tools`（`src/myagent/cli.py:41`），`myagent tools` 只读 `AgentSettings`
-  并打印注册表内容（`src/myagent/cli.py:206`）。
-- **CLI 不再装配**：`src/myagent/cli.py:227`、`:64` 都只调用 `build_agent()`。
+  `myagent tools`（`src/myagent/cli.py:337`），`myagent tools` 只读 `AgentSettings`
+  并打印注册表内容（`src/myagent/cli.py:339`）。
+- **CLI 不再装配**：`src/myagent/cli.py:358`、`:339` 都只调用 `build_agent()`。
   Phase 2 的「装配与命令行混在一个文件里」这个已知妥协到此结束。
 
 ### 3.13 装配：`build_agent` 是唯一的注入点（PLAN 3.5）
 
 ```python
-# src/myagent/runtime.py:38
+# src/myagent/runtime.py:41
 def build_agent(
     settings: Settings | None = None,
     *,
@@ -691,7 +711,7 @@ Settings（.env → Settings.from_env()）
 | Phase 2 的状态 | Phase 3 的做法 | 证据 |
 | --- | --- | --- |
 | 注入具体类（`OpenAICompatModel` / `ContextBuilder` / `SessionManager`） | 注入契约（`BaseModel` / `ContextManager` / `SessionStore`） | `src/myagent/agent/loop.py:122` |
-| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:38`、`src/myagent/cli.py:227` |
+| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:41`、`src/myagent/cli.py:358` |
 | `ContextBuilder` 拼字符串，无预算 | `SectionedContextManager`：section + 优先级 + token 估算 + 超预算报错 | `src/myagent/agent/context.py:114`、`:271` |
 | `memory/` 用 `add(content)` / `search(query, limit=)` | `add(record)` / `search(query, kind=, top_k=)` | `src/myagent/memory/base.py:30`、`:53` |
 | `Tool(ABC)` 是唯一契约 | `BaseTool` Protocol 是契约，`Tool(ABC)` 降为便利实现 | `src/myagent/tools/base.py:152`、`:187` |
@@ -711,8 +731,11 @@ Phase 4 的分层记忆已不在这里：它变成「已实现」，设计见
 | 结构修复（tool 消息顺序、孤儿 tool_call） | Phase 6 | 没有实现 |
 | `last_archived` 前移与摘要检查点 | Phase 6 | 字段已落盘、语义已实现（`src/myagent/session/base.py:38`），没人前移它（Phase 4 的巩固游标是 `memories.consolidated_at`，两回事） |
 | 记忆的定时巩固 / 后台任务 | 按需 | 只有显式命令 `myagent memory consolidate`（PLAN 4.8 的选择） |
-| 混合检索（BM25 / RRF）与查询改写 | Phase 5+ | 现在向量优先、短 query 与降级走关键词（`docs/memory-design.md` §9） |
-| RAG 实现（loader / chunker / embedder / store / retriever） | Phase 5 | `src/myagent/rag/` 只有契约与类型 |
+| 混合检索（BM25 / RRF）与查询改写 | Phase 5+ | 记忆侧向量优先、短 query 与降级走关键词（`docs/memory-design.md` §9）；RAG 侧只有 `VectorRetriever` 与一个离线子串对照（`src/myagent/rag/retriever.py:100`） |
+| 模型型 reranker（cross-encoder / 托管 rerank） | Phase 8 判定 | 只有 `IdentityReranker` / `ScoreReranker`；ADR-0009 的引入条件是 `hit@3` 的提升大于延迟增量 |
+| 把 RAG 接进 Agent 上下文（`MYAGENT_RAG_ENABLED`、预算配额） | Phase 6 | `RagPipeline.build_context()` 已就位（`src/myagent/rag/pipeline.py:219`），但没有 section 消费它 |
+| 按 URL 摄取、增量更新（改一个字就重建） | 按需 | `BaseLoader` 接的是本地路径；内容寻址的代价是「改一个字 = 新文档」（`docs/rag-design.md` §12） |
+| `myagent config check` 启动自检 | Phase 9 | PLAN 5.4 的验收里提到它，但它是 §9.2 的产物；Phase 5 用 `ingest` 的输出行与 `docs list` 验收（`docs/records/phase-5-rag.md` §7） |
 | 真实论文检索 | Phase 7 | `search_local` 是受控桩（`src/myagent/tools/builtin/search_local.py:60`） |
 | 崩溃恢复 / checkpoint | Phase 9 | 无 |
 | `stream()` 与流式 CLI | Phase 6+ | 契约里有，实现抛 `NotImplementedError`；CLI 不流式 |
@@ -727,7 +750,7 @@ Phase 4 的分层记忆已不在这里：它变成「已实现」，设计见
 1. **检索什么**（query 改写、top_k、过滤条件）依赖领域知识。上游的 `ContextBuilder`
    自己持有记忆存储（`agent/context.py:89` 的类、`:97` 的 `MemoryStore(workspace)`），
    于是「组装上下文」与「从哪里取记忆」被绑死在一起；我们把这一步交给
-   `BaseRetriever` / `BaseMemory` 的实现（`src/myagent/rag/retriever.py:19`、
+   `BaseRetriever` / `BaseMemory` 的实现（`src/myagent/rag/retriever.py:43`、
    `src/myagent/memory/base.py:30`），`ContextManager` 只消费检索结果；
 2. **检索结果怎么进 prompt**（section 顺序、配额、超预算时先丢谁）是上下文策略，
    PLAN 6.1 给了优先级表，代码在 `src/myagent/agent/context.py:56`；
@@ -747,7 +770,7 @@ Loop 现在的边界由类型强制：构造函数只收契约（`src/myagent/ag
 
 因为两者的**写入者、生命周期和正确性判据完全不同**：
 
-| 维度 | Memory（`src/myagent/memory/base.py:30`） | RAG（`src/myagent/rag/retriever.py:19`） |
+| 维度 | Memory（`src/myagent/memory/base.py:30`） | RAG（`src/myagent/rag/retriever.py:43`） |
 | --- | --- | --- |
 | 内容来源 | Agent 自己产生的结论、用户偏好（「发生过什么 / 我知道什么」） | 外部语料（论文、笔记），由 ingest 流程写入 |
 | 谁写 | `MemoryManager`（Phase 4）在对话中判定后写 | Loader / Chunker（Phase 5），离线、幂等 |
@@ -814,8 +837,8 @@ dict + 分支的写法会把上面五件事散到调用点，每加一个工具�
 | 主题 | 位置 |
 | --- | --- |
 | 模块职责与「不做什么」 | 本文 §3.1 |
-| 九个契约 | `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、`src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:15`、`src/myagent/rag/vectorstore.py:19`、`src/myagent/rag/retriever.py:19`、`src/myagent/agent/context.py:191`、`src/myagent/session/base.py:44`、`src/myagent/agent/context.py:90` |
-| 唯一装配点 | `src/myagent/runtime.py:38` |
+| 九个契约 + RAG 的三个新契约 | `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、`src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:74`、`src/myagent/rag/vectorstore.py:63`、`src/myagent/rag/retriever.py:43`、`src/myagent/agent/context.py:191`、`src/myagent/session/base.py:44`、`src/myagent/agent/context.py:90`；`src/myagent/rag/loader.py:71`、`src/myagent/rag/chunker.py:46`、`src/myagent/rag/reranker.py:29` |
+| 唯一装配点 | `src/myagent/runtime.py:41` |
 | 一轮的行为上限 | `src/myagent/agent/runtime.py:33` |
 | Loop 4 阶段 / 锁 / 失败语义 | `src/myagent/agent/loop.py:156`、`:247`、`:174` |
 | ContextManager / section / 预算 | `src/myagent/agent/context.py:191`、`:89`、`:246` |
@@ -823,14 +846,16 @@ dict + 分支的写法会把上面五件事散到调用点，每加一个工具�
 | 工具注册表（准备/执行/定义） | `src/myagent/tools/registry.py:64`、`:106`、`:56` |
 | 内置工具注册 | `src/myagent/tools/builtin/__init__.py:30` |
 | 会话契约 / JSONL 实现 | `src/myagent/session/base.py:44`、`src/myagent/session/manager.py:41` |
-| 记忆契约 / 分层实现 / 装配 | `src/myagent/memory/base.py:30`、`src/myagent/memory/manager.py:58`、`src/myagent/runtime.py:84` |
+| 记忆契约 / 分层实现 / 装配 | `src/myagent/memory/base.py:30`、`src/myagent/memory/manager.py:58`、`src/myagent/runtime.py:87` |
 | 记忆检索（衰减 / 降级） | `src/myagent/memory/retriever.py:79`、`:126` |
 | 写入策略（拆句 / 清单 / 去重） | `src/myagent/memory/extractor.py:184`、`:200` |
 | 巩固（Episodic → Semantic） | `src/myagent/memory/consolidator.py:92` |
 | 记忆注入端口（Loop 侧） | `src/myagent/agent/context.py:90`、`src/myagent/agent/loop.py:224`、`:239` |
-| 检索契约（未接线） | `src/myagent/rag/retriever.py:19` |
+| RAG CLI 入口 | `src/myagent/cli.py:120`、`:145`、`:157`、`:179`、`:199`、`:215` |
+| RAG 编排 / 契约 / 装配 | `src/myagent/rag/pipeline.py:101`、`src/myagent/rag/chunker.py:54`、`src/myagent/rag/vectorstore.py:85`、`src/myagent/runtime.py:117` |
+| 切分默认值与实验依据 | `src/myagent/config/settings.py:136`、`docs/decision-records/0009-chunking-and-retrieval.md` |
 | token 估算 | `src/myagent/tokens.py:37` |
-| 设置项 | `src/myagent/config/settings.py:376`（LLM）、`:457`（Agent）、`:506`（Settings 总入口）、`:253`（Memory） |
-| CLI 入口 | `src/myagent/cli.py:41` |
+| 设置项 | `src/myagent/config/settings.py:463`（LLM）、`:544`（Agent）、`:593`（Settings 总入口）、`:280`（Memory）、`:354`（RAG） |
+| CLI 入口 | `src/myagent/cli.py:52` |
 | 契约与边界的测试 | `tests/test_contracts.py:252`、`:305`、`:363`、`:435` |
 | 扩展点决策（ADR） | `docs/decision-records/0007-framework-extension-points.md` |

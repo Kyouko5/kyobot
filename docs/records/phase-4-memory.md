@@ -33,14 +33,14 @@ SQLite + Qdrant。要回答的四个问题是：**什么该记住（4.6）、记
 | 四层：Working / Episodic / Semantic + Retriever | PLAN 4.0 | `src/myagent/memory/manager.py:58` |
 | Working 不落库，直接从会话历史构造 | PLAN 4.0 约束 1（不重复存原文） | `src/myagent/memory/working.py:34` |
 | 记录进 SQLite、向量进 Qdrant，`memory_id` 关联 | ADR-0003、PLAN 4.5 | `src/myagent/memory/sqlite_store.py:49`、`src/myagent/memory/vector_index.py:87` |
-| 记忆用独立 collection（`myagent_memories`） | ADR-0008：两类数据的删除粒度不同 | `src/myagent/config/settings.py:159` |
+| 记忆用独立 collection（`myagent_memories`） | ADR-0008：两类数据的删除粒度不同 | `src/myagent/config/settings.py:180` |
 | 写入 = 规则兜底 + LLM 抽取 → 策略 → 去重 | PLAN 4.6 | `src/myagent/memory/extractor.py:150`、`:184`、`:200` |
 | 上限（500 字符 / 3 条 / importance ≥ 0.5）在代码里强制 | PLAN 4.1「不靠 prompt 自觉」 | `src/myagent/memory/extractor.py:271`、`:293` |
-| Episodic 时间衰减、Semantic 不衰减 | PLAN 4.3 / 4.4 | `src/myagent/memory/retriever.py:126` |
+| Episodic 时间衰减、Semantic 不衰减 | PLAN 4.3 / 4.4 | `src/myagent/memory/retriever.py:125` |
 | 巩固「只有成功才前移游标」；模型不合并就用规则 | PLAN 4.8、上游 `agent/memory.py:619` | `src/myagent/memory/consolidator.py:92`、`:119` |
 | Loop 只认 `MemoryProvider`（不 import `myagent.memory`） | Phase 3 的依赖方向（ADR-0007） | `src/myagent/agent/context.py:90`、`src/myagent/agent/loop.py:224` |
 | 失败降级：`degraded=True` + note，绝不抛出 | PLAN 验收「可读错误而不是堆栈」 | `src/myagent/memory/retriever.py:79` |
-| 装配单独提供 `build_memory()` | CLI 需要「只要记忆、不要 Loop」 | `src/myagent/runtime.py:84` |
+| 装配单独提供 `build_memory()` | CLI 需要「只要记忆、不要 Loop」 | `src/myagent/runtime.py:87` |
 
 ## 4. 实现
 
@@ -54,7 +54,7 @@ SQLite + Qdrant。要回答的四个问题是：**什么该记住（4.6）、记
 | `src/myagent/memory/semantic.py` | 90 | Semantic 层：同上，不衰减 |
 | `src/myagent/memory/sqlite_store.py` | 303 | `memories` + `memory_vectors`、关键词兜底、巩固游标、向量状态 |
 | `src/myagent/memory/vector_index.py` | 239 | `MemoryIndex` 契约 + `QdrantMemoryIndex`（唯一 import `qdrant_client`） |
-| `src/myagent/memory/embedder.py` | 133 | `OpenAICompatEmbedder`：批量 16、重试 3 次、错误翻译 |
+| `src/myagent/memory/embedder.py`（Phase 5 已搬到 `src/myagent/rag/embedder.py`） | 133 | `OpenAICompatEmbedder`：批量 16、重试 3 次、错误翻译 |
 | `src/myagent/memory/retriever.py` | 160 | 向量检索 + 衰减重排 + 短 query / 降级的关键词兜底 |
 | `src/myagent/memory/extractor.py` | 411 | `MemoryExtractor`：规则、LLM 解析、写/不写清单、拆句、去重 |
 | `src/myagent/memory/consolidator.py` | 231 | `Consolidator`：聚类 → 合并（模型或规则）→ 写 Semantic → 标游标 |

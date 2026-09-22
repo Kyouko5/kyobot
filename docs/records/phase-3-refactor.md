@@ -58,7 +58,7 @@ cli.py ──▶ runtime.py ──▶ 具体实现（OpenAICompatModel / builtin
 | 决策 | 依据 | 结果 |
 | --- | --- | --- |
 | 契约用 `Protocol`，不强制继承 | ADR-0007 | `src/myagent/tools/base.py:152`（`BaseTool`）+ `:187`（`Tool(ABC)` 降为便利实现） |
-| 契约就近定义，不建 `protocols.py` | ADR-0007 | `rag/`、`memory/` 各自持有契约（`src/myagent/rag/retriever.py:19`） |
+| 契约就近定义，不建 `protocols.py` | ADR-0007 | `rag/`、`memory/` 各自持有契约（`src/myagent/rag/retriever.py:43`） |
 | `ContextSection` 带优先级但本阶段不裁剪 | PLAN 3.3 | 超预算抛 `ContextBudgetExceeded`（`src/myagent/agent/context.py:173`） |
 | 检索结果以 `ContextItem` 交给上下文 | `agent` 不能依赖 `memory` / `rag` | `src/myagent/agent/context.py:75` |
 | 运行期上限独立成 `AgentRuntimeConfig` | PLAN 3.2 | 预算公式 `context_window - max_tokens - 1024`（`src/myagent/agent/runtime.py:73`） |

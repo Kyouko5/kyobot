@@ -3,7 +3,7 @@
 - 状态：已接受
 - 日期：2026-09-20
 - 关联：Phase 4（4.0 分层 / 4.5 存储 / 4.6 写入策略 / 4.8 巩固）；
-  实现入口 `src/myagent/memory/`、装配点 `src/myagent/runtime.py:84`；
+  实现入口 `src/myagent/memory/`、装配点 `src/myagent/runtime.py:87`；
   设计说明 [`docs/memory-design.md`](../memory-design.md)
 
 ## 背景
@@ -28,11 +28,11 @@ Phase 3 已经用 `Protocol` + 装配注入立好了 `BaseMemory` 契约。本 A
    `src/myagent/memory/working.py:34`），Episodic 参与时间衰减，Semantic 不衰减。
 2. **记录的真相在 SQLite，向量只是索引**：`memories` 存文本/类型/重要度/来源，
    `memory_vectors` 记「这条记录在哪个 collection、用哪个模型、什么维度」；
-   检索命中后**回到 SQLite 取记录**（`src/myagent/memory/retriever.py:145`），
+   检索命中后**回到 SQLite 取记录**（`src/myagent/memory/retriever.py:144`），
    所以陈旧向量不会漏进答案，向量库挂了记录也还在、还能按关键词搜。
 3. **记忆用独立 collection**：`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`，
    与文档向量的 `myagent_documents` 分开；`QdrantSettings` 在两者相等时直接抛
-   `ValueError`（`src/myagent/config/settings.py:159`）。
+   `ValueError`（`src/myagent/config/settings.py:180`）。
    理由：记忆按 id 逐条删除、文档整篇重灌，生命周期与清理粒度不同，混在一起会让
    「删掉一篇论文」的 `delete(document_id)` 有误伤记忆的可能。
 4. **LLM 提议，代码裁决**：抽取器（`src/myagent/memory/extractor.py:150`）同时跑规则兜底与
@@ -41,7 +41,7 @@ Phase 3 已经用 `Protocol` + 装配注入立好了 `BaseMemory` 契约。本 A
 5. **明确的「不写」清单**：闲聊（整句匹配）、一次性查询、工具原始输出、密钥与隐私，
    见 `docs/memory-design.md` §4.1 的表格（判定位置 `src/myagent/memory/extractor.py:79`、`:88`、`:89`、`:322`）。
 6. **衰减只作用于 Episodic**：`score = cosine × 0.5 ** (age_days / half_life_days)`，
-   半衰期默认 30 天（`src/myagent/memory/retriever.py:126`）；Semantic 的 factor 恒为 1.0——
+   半衰期默认 30 天（`src/myagent/memory/retriever.py:125`）；Semantic 的 factor 恒为 1.0——
    重要偏好不该被时间吃掉（PLAN 4.4）。
 7. **巩固只在成功时前移游标**：`Consolidator.consolidate`（`src/myagent/memory/consolidator.py:92`）
    先写 Semantic、写成功后才 `mark_consolidated`；`dry_run` 与失败都保持 pending。
@@ -53,7 +53,7 @@ Phase 3 已经用 `Protocol` + 装配注入立好了 `BaseMemory` 契约。本 A
    「这轮没有记忆」（`src/myagent/agent/loop.py:224`、`:239`）。记忆是增强项，不是依赖。
 10. **`agent` 不 import `myagent.memory`**：Loop 只认 `MemoryProvider`
     （`src/myagent/agent/context.py:90`，`recall` + `observe` 两个方法），
-    `MemoryManager` 实现它；装配仍在 `myagent.runtime`（`build_memory`，`src/myagent/runtime.py:84`）。
+    `MemoryManager` 实现它；装配仍在 `myagent.runtime`（`build_memory`，`src/myagent/runtime.py:87`）。
 
 ## 理由
 
