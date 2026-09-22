@@ -14,6 +14,7 @@
     myagent docs delete <document_id>
     myagent session compact cli:default   # 把旧对话压成摘要检查点（Phase 6）
     myagent chat --show-context           # 打印这一轮各 section 的预算账本（Phase 6）
+    myagent web --port 8080               # 在浏览器里用同一个 agent（Phase G）
 
 Standard library ``argparse`` only: the framework keeps its runtime dependency
 list at one entry (``openai``, ADR-0006) and the CLI is thin enough not to need
@@ -34,6 +35,8 @@ from myagent.agent.context import ContextBundle, ContextReport, SectionReport
 from myagent.agent.loop import AgentLoop, TurnContext
 from myagent.config.env import MissingEnvError
 from myagent.config.settings import DEFAULT_RAG_TOP_K, LLMSettings, Settings
+from myagent.gateway import serve as serve_gateway
+from myagent.gateway.server import DEFAULT_HOST, DEFAULT_PORT
 from myagent.memory.manager import MemoryManager
 from myagent.memory.types import KINDS, Kind, MemoryRecord
 from myagent.models.base import LLMError
@@ -70,6 +73,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _rag(args)
     if args.command == "session":
         return _session(args)
+    if args.command == "web":
+        return _web(args)
     return _chat(args)
 
 
@@ -93,10 +98,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     subcommands.add_parser("tools", help="list the registered tools")
+    _add_web_parser(subcommands)
     _add_memory_parser(subcommands)
     _add_rag_parsers(subcommands)
     _add_session_parser(subcommands)
     return parser
+
+
+def _add_web_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """``myagent web``: the browser UI on a local port (PLAN Phase G).
+
+    The defaults stay on loopback because the gateway has no authentication:
+    ``--allow-remote`` is the deliberate, warned-about way to leave it.
+    """
+    web = subcommands.add_parser("web", help="serve the browser UI on a local port")
+    web.add_argument("--host", default=DEFAULT_HOST, help=f"bind address (default {DEFAULT_HOST})")
+    web.add_argument("--port", type=int, default=DEFAULT_PORT, help="port (0 picks a free one)")
+    web.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="accept requests from other hosts too (the gateway has no authentication)",
+    )
+    web.add_argument("--no-open", action="store_true", help="do not open a browser window")
 
 
 def _add_session_parser(
@@ -436,6 +459,21 @@ def _list_tools() -> int:
         parameters = ", ".join(tool.parameters.get("properties", {})) or "no parameters"
         print(f"{name} ({mode})\n    {tool.description}\n    parameters: {parameters}")
     return 0
+
+
+def _web(args: argparse.Namespace) -> int:
+    """Serve the browser UI and block until ``Ctrl+C`` (PLAN Phase G).
+
+    Deliberately does not require credentials: starting the gateway *without* a
+    key is how the settings page gets its first one. A turn started before that
+    answers with the same ``MissingEnvError`` text the chat endpoint reports.
+    """
+    return serve_gateway(
+        host=args.host,
+        port=args.port,
+        allow_remote=args.allow_remote,
+        open_browser=not args.no_open,
+    )
 
 
 def _chat(args: argparse.Namespace) -> int:

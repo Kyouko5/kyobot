@@ -85,6 +85,10 @@ ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 # `Filter` mapping (`src/myagent/rag/types.py`), and the SDK's match types are a
 # str/int/bool union: the value is dynamically typed at that one edge.
 "src/myagent/rag/vectorstore.py" = ["ANN401"]
+# The gateway is a dynamic boundary too: JSON bodies arrive as parsed dicts, and
+# `http.server` hands `log_message` a printf template plus untyped arguments
+# (PLAN Phase G). Everything else in `myagent.gateway` stays strictly typed.
+"src/myagent/gateway/*.py" = ["ANN401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["myagent"]

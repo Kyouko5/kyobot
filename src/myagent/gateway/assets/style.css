@@ -1,0 +1,403 @@
+/* MyAgent gateway: one dark theme, no framework, no build step (ADR-0011). */
+
+:root {
+  --bg: #0b0d12;
+  --panel: #12151c;
+  --panel-2: #171b24;
+  --line: #232936;
+  --text: #e6e9f0;
+  --muted: #8b93a7;
+  --accent: #5b8cff;
+  --accent-soft: #1e2a4d;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+  --radius: 12px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* sidebar ---------------------------------------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 250px;
+  padding: 16px 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 6px 6px;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.brand-name {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.version {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sessions {
+  flex: 1;
+  overflow-y: auto;
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sessions li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sessions li:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sessions li.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.sessions .key {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sessions .count {
+  font-size: 11px;
+}
+
+.sessions li:hover .count {
+  visibility: hidden;
+}
+
+.sessions .remove {
+  position: absolute;
+  margin-left: -18px;
+  visibility: hidden;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.sessions li:hover .remove {
+  visibility: visible;
+}
+
+.sidebar-foot {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+/* chat ------------------------------------------------------------------- */
+
+.chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.session-key {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.badge.ready {
+  border-color: #2c4a37;
+  color: var(--ok);
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.empty {
+  margin: auto;
+  max-width: 460px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty ul {
+  padding-left: 18px;
+  text-align: left;
+}
+
+.message {
+  max-width: 760px;
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: var(--panel-2);
+}
+
+.message.assistant.failed {
+  border: 1px solid var(--danger);
+}
+
+.message.pending {
+  color: var(--muted);
+}
+
+.message .meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.message .tools {
+  color: var(--accent);
+}
+
+.composer {
+  display: flex;
+  gap: 10px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.composer textarea:focus,
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.error {
+  margin: 0 20px 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* controls --------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  align-self: flex-end;
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #07090d;
+  font-weight: 600;
+}
+
+button.primary:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+button.ghost {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+}
+
+button.ghost:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+button.block {
+  width: 100%;
+  text-align: left;
+}
+
+/* settings dialog -------------------------------------------------------- */
+
+.dialog {
+  width: min(620px, 92vw);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px;
+}
+
+.dialog-body h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.dialog-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.dialog-body .row {
+  display: flex;
+  gap: 12px;
+}
+
+.dialog-body .row label {
+  flex: 1;
+}
+
+.dialog-body input,
+.dialog-body select {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.status {
+  min-height: 20px;
+  font-size: 13px;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.bad {
+  color: var(--danger);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .sidebar {
+    display: none;
+  }
+
+  .dialog-body .row {
+    flex-direction: column;
+  }
+}

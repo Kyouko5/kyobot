@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyAgent</title>
+    <link rel="icon" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">◆</span>
+        <span class="brand-name">MyAgent</span>
+        <span class="version" id="version"></span>
+      </div>
+      <button class="ghost block" id="new-session" type="button">＋ 新会话</button>
+      <ul class="sessions" id="sessions"></ul>
+      <div class="sidebar-foot">
+        <button class="ghost block" id="open-config" type="button">⚙ API 配置</button>
+      </div>
+    </aside>
+
+    <main class="chat">
+      <header class="chat-head">
+        <div>
+          <div class="session-key" id="session-key">web:default</div>
+          <div class="hint" id="model-hint"></div>
+        </div>
+        <div class="badges">
+          <span class="badge" id="model-badge">…</span>
+          <span class="badge hidden" id="context-badge" title="本轮上下文用量"></span>
+          <button class="ghost" id="clear-session" type="button" title="清空当前会话">清空</button>
+        </div>
+      </header>
+
+      <div class="messages" id="messages" aria-live="polite"></div>
+
+      <form class="composer" id="composer">
+        <textarea
+          id="input"
+          rows="3"
+          placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
+          aria-label="输入消息"
+        ></textarea>
+        <button class="primary" id="send" type="submit">发送</button>
+      </form>
+      <div class="error hidden" id="error" role="alert"></div>
+    </main>
+
+    <dialog class="dialog" id="config-dialog">
+      <form method="dialog" class="dialog-body" id="config-form">
+        <h2>API 配置</h2>
+        <p class="hint">
+          保存后写入 <code>.env</code> 并立即重建 agent（与 <code>myagent chat</code> 共用同一份配置）。
+        </p>
+        <label>
+          <span>Provider</span>
+          <select id="cfg-provider"></select>
+        </label>
+        <label>
+          <span>模型（<code>LLM_MODEL</code>）</span>
+          <input id="cfg-model" type="text" autocomplete="off" placeholder="例如 qwen3-max" />
+        </label>
+        <label>
+          <span>Base URL（<code>LLM_BASE_URL</code>，留空用 provider 默认）</span>
+          <input id="cfg-base-url" type="text" autocomplete="off" placeholder="https://…/v1" />
+        </label>
+        <label>
+          <span>API Key（<code>LLM_API_KEY</code>）</span>
+          <input id="cfg-api-key" type="password" autocomplete="off" />
+          <small class="hint" id="cfg-api-key-hint"></small>
+        </label>
+        <div class="row">
+          <label>
+            <span>最大输出（<code>LLM_MAX_TOKENS</code>）</span>
+            <input id="cfg-max-tokens" type="number" min="1" step="1" />
+          </label>
+          <label>
+            <span>上下文窗口（<code>LLM_CONTEXT_WINDOW</code>）</span>
+            <input id="cfg-context-window" type="number" min="1" step="1" />
+          </label>
+          <label>
+            <span>温度（<code>LLM_TEMPERATURE</code>）</span>
+            <input id="cfg-temperature" type="number" min="0" step="0.1" />
+          </label>
+        </div>
+        <div class="status" id="cfg-status"></div>
+        <div class="dialog-actions">
+          <button class="ghost" id="cfg-test" type="button">测试连接</button>
+          <button class="ghost" id="cfg-cancel" type="button">关闭</button>
+          <button class="primary" id="cfg-save" type="button">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
