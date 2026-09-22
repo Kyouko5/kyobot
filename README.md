@@ -241,4 +241,4 @@ kyobot/
 
 ## 上游致谢
 
-- [HKUDS/nanobot](https://github.com/HKUDS/nanobot)（v0.3.5，本地参照 commit `2fb165939`）：Agent Loop / Runner / Bus / Session / Memory 的核心设计来源。
+- [HKUDS/nanobot](https://github.com/HKUDS/nanobot)：Agent Loop / Runner / Bus 的核心设计来源。
