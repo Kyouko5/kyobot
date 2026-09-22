@@ -35,6 +35,7 @@ cp .env.example .env
 # 2. 创建虚拟环境并安装依赖（本机 Python 缺少 CA 证书包，脚本会处理）
 scripts/bootstrap.sh
 source .venv/bin/activate
+myagent --help                       # 若报 ModuleNotFoundError，见下方说明
 
 # 3. 质量门：ruff format --check / ruff check / mypy / pytest + coverage
 scripts/check.sh
@@ -108,6 +109,16 @@ api_key = require_env("LLM_API_KEY")  # 未填则抛 MissingEnvError，不会静
 
 ```bash
 PYTHONPATH=src python3 -m pytest
+```
+
+如果 `source .venv/bin/activate` 之后 `myagent` 仍报 `ModuleNotFoundError: No module named
+'myagent'`，说明 editable 安装依赖的 `.pth` 文件在 `site-packages` 里带了 macOS 的
+`UF_HIDDEN` 标记（CPython 3.12.5+ 会跳过隐藏的 `.pth`，某些同步/安全软件会在几秒内把该标记
+加回去，所以 `chflags nohidden` 不管用）。`scripts/bootstrap.sh` 已经检测这种情况并把
+`src` 追加到 `.venv/bin/activate` 的 `PYTHONPATH`；手动绕过则用：
+
+```bash
+PYTHONPATH=src myagent web        # 或 PYTHONPATH=src .venv/bin/python -m myagent web
 ```
 
 浏览器 UI 用的是**标准库 `http.server`**，默认只监听 `127.0.0.1`、校验 `Host` / `Origin`，

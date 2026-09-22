@@ -27,6 +27,26 @@ echo "== installing dev dependencies =="
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -e '.[dev]'
 
+# The editable install registers `src/` through a .pth file in site-packages.
+# CPython 3.12.5+ ignores .pth files carrying the macOS UF_HIDDEN flag, and on
+# some machines a sync/security agent re-applies that flag to every .pth under
+# site-packages within seconds. Re-checking is useless in that case, so fall
+# back to exporting the path from the venv activation script.
+SITE_PACKAGES="$(.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')"
+if .venv/bin/python -c 'import myagent' >/dev/null 2>&1; then
+  echo "== editable install resolves =="
+else
+  echo "== .pth is ignored (hidden flag); exporting src/ from activate instead =="
+  MARKER="# myagent: src layout (editable .pth is unusable here)"
+  if ! grep -qF "$MARKER" .venv/bin/activate; then
+    printf '\n%s\nexport PYTHONPATH="%s/src${PYTHONPATH:+:$PYTHONPATH}"\n' \
+      "$MARKER" "$PWD" >> .venv/bin/activate
+  fi
+  .venv/bin/python -c 'import myagent' >/dev/null 2>&1 || {
+    echo "warning: myagent still not importable; use PYTHONPATH=src .venv/bin/python -m myagent" >&2
+  }
+fi
+
 echo
 echo "Done. Activate with: source .venv/bin/activate"
 echo "Then run the quality gate: scripts/check.sh"
