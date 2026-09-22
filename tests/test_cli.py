@@ -926,3 +926,30 @@ def test_the_session_commands_need_a_verb(capsys):
 
     assert info.value.code == 2
     assert "the following arguments are required: session_command" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Phase G: the browser gateway
+# --------------------------------------------------------------------------
+
+
+def test_web_serves_the_gateway_on_loopback_by_default(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(cli, "serve_gateway", lambda **kwargs: calls.append(kwargs) or 0)
+
+    assert cli.main(["web"]) == 0
+
+    assert calls == [
+        {"host": "127.0.0.1", "port": 8080, "allow_remote": False, "open_browser": True}
+    ]
+
+
+def test_web_passes_the_bind_address_through_and_can_skip_the_browser(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(cli, "serve_gateway", lambda **kwargs: calls.append(kwargs) or 0)
+
+    assert (
+        cli.main(["web", "--host", "0.0.0.0", "--port", "9000", "--allow-remote", "--no-open"]) == 0
+    )
+
+    assert calls == [{"host": "0.0.0.0", "port": 9000, "allow_remote": True, "open_browser": False}]
