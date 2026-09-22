@@ -127,10 +127,10 @@ rag.*                 → rag.types / rag.loader / rag.chunker / rag.embedder /
 ```text
 myagent chat -m "算一下 (12+8)*3，再读一下 workspace/project-notes.md"
   │
-  │ cli._chat()                                   src/myagent/cli.py:441
-  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:444
-  │  └ loop = build_agent()                         src/myagent/cli.py:450
-  │     turn = asyncio.run(loop.run_turn(text, session_key))   src/myagent/cli.py:451
+  │ cli._chat()                                   src/myagent/cli.py:479
+  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:482
+  │  └ loop = build_agent()                         src/myagent/cli.py:488
+  │     turn = asyncio.run(loop.run_turn(text, session_key))   src/myagent/cli.py:489
   ▼
 AgentLoop._process()                             src/myagent/agent/loop.py:172
   │  async with self._session_lock(session_key):       ← 会话内串行（:320）
@@ -610,7 +610,7 @@ RagPipeline            # src/myagent/rag/pipeline.py:130  ingest / retrieve / bu
 3. `RetrievedChunk.score` 与 `chunk.id` 留在契约里的原因不变：Phase 8 用这两个字段算 `hit@k`。
 
 装配与 CLI 在 `build_rag`（`src/myagent/runtime.py:151`）与
-`myagent ingest|search|docs`（`src/myagent/cli.py:158`）。
+`myagent ingest|search|docs`（`src/myagent/cli.py:181`）。
 细节见 [`docs/rag-design.md`](./rag-design.md)，实验与默认值的由来见 ADR-0009。
 
 ### 3.12 config 与 CLI
@@ -626,9 +626,9 @@ RagPipeline            # src/myagent/rag/pipeline.py:130  ingest / retrieve / bu
   `require_model()` / `require_api_key()`（`src/myagent/config/settings.py:536`、`:532`）在真正要发请求时才失败——
   这样 `myagent tools` 这类离线命令照常可用。
 - `myagent chat -m "..."` / `myagent chat`（交互：`/exit`、`/session`、`/clear`）/
-  `myagent tools`（`src/myagent/cli.py:429`），`myagent tools` 只读 `AgentSettings`
-  并打印注册表内容（`src/myagent/cli.py:431`）。
-- **CLI 不再装配**：`src/myagent/cli.py:450`、`:339` 都只调用 `build_agent()`。
+  `myagent tools`（`src/myagent/cli.py:452`），`myagent tools` 只读 `AgentSettings`
+  并打印注册表内容（`src/myagent/cli.py:454`）。
+- **CLI 不再装配**：`src/myagent/cli.py:488`、`:339` 都只调用 `build_agent()`。
   Phase 2 的「装配与命令行混在一个文件里」这个已知妥协到此结束。
 
 ### 3.13 装配：`build_agent` 是唯一的注入点（PLAN 3.5）
@@ -729,7 +729,7 @@ Settings（.env → Settings.from_env()）
 | Phase 2 的状态 | Phase 3 的做法 | 证据 |
 | --- | --- | --- |
 | 注入具体类（`OpenAICompatModel` / `ContextBuilder` / `SessionManager`） | 注入契约（`BaseModel` / `ContextManager` / `SessionStore`） | `src/myagent/agent/loop.py:123` |
-| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:47`、`src/myagent/cli.py:450` |
+| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:47`、`src/myagent/cli.py:488` |
 | `ContextBuilder` 拼字符串，无预算 | `SectionedContextManager`：section + 优先级 + token 估算 + 超预算报错 | `src/myagent/agent/context.py:223`、`:271` |
 | `memory/` 用 `add(content)` / `search(query, limit=)` | `add(record)` / `search(query, kind=, top_k=)` | `src/myagent/memory/base.py:30`、`:53` |
 | `Tool(ABC)` 是唯一契约 | `BaseTool` Protocol 是契约，`Tool(ABC)` 降为便利实现 | `src/myagent/tools/base.py:152`、`:187` |
@@ -871,11 +871,11 @@ dict + 分支的写法会把上面五件事散到调用点，每加一个工具�
 | 巩固（Episodic → Semantic） | `src/myagent/memory/consolidator.py:92` |
 | 记忆注入端口（Loop 侧） | `src/myagent/agent/context.py:180`、`src/myagent/agent/loop.py:247`、`:278` |
 | 文档注入端口（Loop 侧） | `src/myagent/agent/context.py:204`、`src/myagent/agent/loop.py:262` |
-| RAG CLI 入口 | `src/myagent/cli.py:158`（解析器）、`:183`（分发）、`:195`（ingest）、`:217`（search）、`:237`（docs list）、`:253`（docs delete） |
+| RAG CLI 入口 | `src/myagent/cli.py:181`（解析器）、`:183`（分发）、`:195`（ingest）、`:217`（search）、`:237`（docs list）、`:253`（docs delete） |
 | RAG 编排 / 契约 / 装配 | `src/myagent/rag/pipeline.py:130`、`src/myagent/rag/chunker.py:54`、`src/myagent/rag/vectorstore.py:85`、`src/myagent/runtime.py:151` |
 | 切分默认值与实验依据 | `src/myagent/config/settings.py:138`、`docs/decision-records/0009-chunking-and-retrieval.md` |
 | token 估算 | `src/myagent/tokens.py:37` |
 | 设置项 | `src/myagent/config/settings.py:473`（LLM）、`:554`（Agent）、`:603`（Settings 总入口）、`:282`（Memory）、`:356`（RAG） |
-| CLI 入口 | `src/myagent/cli.py:59` |
+| CLI 入口 | `src/myagent/cli.py:62` |
 | 契约与边界的测试 | `tests/test_contracts.py:277`、`:293`、`:484`、`:491` |
 | 扩展点决策（ADR） | `docs/decision-records/0007-framework-extension-points.md` |

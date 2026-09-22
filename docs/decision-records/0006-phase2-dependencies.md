@@ -20,7 +20,7 @@ Phase 0 结束时运行时依赖只有 `python-dotenv`。Phase 2 需要两件新
 1. **引入 `openai>=1.50`（AsyncOpenAI）** 作为唯一的模型客户端实现，
    由 `OpenAICompatModel` 包一层（`src/myagent/models/openai_compat.py:62`）。
 2. **CLI 使用标准库 `argparse`**，不引入 typer / click / rich
-   （`src/myagent/cli.py:68`）。
+   （`src/myagent/cli.py:71`）。
 3. 该依赖的作用域被限制在 `myagent.models.openai_compat`：框架其余部分只认
    `BaseModel` 协议（`src/myagent/models/base.py:71`）与 `LLMError` / `ContextWindowExceeded`
    （`src/myagent/models/base.py:31`、`src/myagent/models/base.py:35`）——`openai` 的异常类型

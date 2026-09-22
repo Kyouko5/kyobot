@@ -94,7 +94,8 @@ Application
 * Voice
 * 多模态 Agent
 * 分布式 Agent Runtime
-* 复杂 Web UI
+* 复杂 Web UI（本清单指的是上游那种「多频道 + 工作流 + 设置中心」量级的前端；
+  只做聊天与 API 配置的浏览器入口见 **Phase G**，它是核心能力的交付界面，不是这里说的复杂前端）
 * 大规模生产部署
 
 原则：
@@ -126,6 +127,9 @@ RAG 系统建设
     ↓
 Phase 6
 Context 系统重构
+    ↓
+Phase G
+浏览器 UI + 本地 Gateway
     ↓
 Phase 7
 垂直领域 Agent
@@ -879,7 +883,7 @@ Settings（.env）
       → `Settings`（`src/myagent/config/settings.py:603`，`from_env()` 在 `:621`）；默认组件的构造
       见 `src/myagent/runtime.py:81`（会话）、`:72`（工具）、`:75`（上下文）、`:79`（运行参数）
 * [x] CLI 只调用 `build_agent()`，不手工 new 组件
-      → `src/myagent/cli.py:450`（chat）、`:339`（tools）；Phase 2 的 `build_agent_loop()` 已删除
+      → `src/myagent/cli.py:488`（chat）、`:339`（tools）；Phase 2 的 `build_agent_loop()` 已删除
 
 ## 阶段产出
 
@@ -1553,7 +1557,7 @@ input_budget = context_window_tokens - max_output_tokens - 1024（安全余量�
       `build_agent` 读 `resolved_runtime.context_budget`（`src/myagent/runtime.py:95`）
 * [x] 每次 build 产出 `ContextReport`：每段的 `budget / used / dropped`，进日志（Phase 9 结构化）
       → `src/myagent/agent/context.py:288`、`summary_line()`（`:301`）、降级时的 info 日志（`:510`）；
-      `myagent chat --show-context` 打印同一份报告（`src/myagent/cli.py:460`）
+      `myagent chat --show-context` 打印同一份报告（`src/myagent/cli.py:498`）
 * [x] `tests/test_context.py::test_budget_clipping`：四来源都塞满 → 结果 token ≤ budget 且结构合法
       → `tests/test_context.py:341`；实测 1072 → 400 token（`docs/records/phase-6-context.md` §6.1）
 
@@ -1671,6 +1675,174 @@ tests/test_context.py
    存储与显式命令照常（`docs/records/phase-6-context.md` §6.3）。
 
 记录：`docs/records/phase-6-context.md`
+
+---
+
+# Phase G：浏览器 UI + 本地 Gateway
+
+> 这个阶段不在最初的十条路线里。它是 Phase 6 之后插入的**交付阶段**：把已经能跑的核心
+> runtime（Loop / Memory / RAG / Context）暴露成一个浏览器可用的界面，让「用起来」不再依赖
+> 终端。编号用 G 而不是 6.5，是因为它有自己的产出、自己的 ADR 和自己的记录。
+
+## 目标
+
+给 agent 补一个**只做核心功能**的浏览器入口：聊天 + API 配置 + 会话管理。
+要求用**本地 gateway**承载，并且**复用同一个 `AgentLoop`**，不复制一套 runtime。
+
+前置：Phase 3 的 `build_agent()` 装配点、Phase 4 的 Memory、Phase 5 的 RAG、
+Phase 6 的上下文预算、ADR-0004（密钥只有一条读取路径）、ADR-0006（每个运行依赖先有 ADR）。
+
+参考上游：`nanobot/nanobot/webui/ws_http.py`（bootstrap / sessions 列表的接口形状）、
+`nanobot/webui/`（React 前端的规模对照）。学形状，不搬规模。
+
+## G.1 传输层：标准库 `http.server`，不用框架
+
+```text
+浏览器 (index.html + app.js)
+   │  fetch POST /api/chat
+   ▼
+GatewayRequestHandler._route()      src/myagent/gateway/server.py:193
+   │  _authorize()  Host / Origin 必须是本机       src/myagent/gateway/server.py:233
+   │  _read_json()  限长 1 MiB、必须 application/json  src/myagent/gateway/server.py:243
+   ▼
+GatewayApp.chat()                   src/myagent/gateway/app.py:207
+   ▼
+ChatRunner.turn() ──submit──▶ 常驻事件循环线程      src/myagent/gateway/runner.py:77
+   ▼
+AgentLoop.run_turn()                src/myagent/agent/loop.py:150
+```
+
+* [x] 9 条路由：`/`、`/static/<name>`、`/api/bootstrap`、`GET|POST /api/config`、
+      `POST /api/config/test`、`POST /api/chat`、`GET /api/sessions`、
+      `GET|DELETE /api/sessions/<key>`（`src/myagent/gateway/server.py:193`）
+* [x] 运行依赖仍是 4 条，不引 FastAPI / aiohttp / uvicorn / websockets（`pyproject.toml:22`）
+* [x] 无流式：V1 的 `BaseModel.stream()` 是保留接口（`src/myagent/models/base.py:88`），
+      所以一轮一次返回；真流式落地后 SSE / WS 只需在 `gateway/` 内加一层
+* [x] 决策记 **ADR-0011**
+
+## G.2 并发：一个进程一个事件循环
+
+`AgentLoop` 每个会话一把 `asyncio.Lock`（`src/myagent/agent/loop.py:320`），
+而 `asyncio.Lock` 绑定首次 await 它的 loop——每个 HTTP 请求各自 `asyncio.run()`
+会让**第二条消息必崩**（"bound to a different event loop"）。
+
+* [x] `ChatRunner`（`src/myagent/gateway/runner.py:37`）起一个 daemon 线程跑
+      `loop.run_forever()`（`:96`），请求用 `run_coroutine_threadsafe` 提交（`submit`，`:61`）
+* [x] 同会话串行（锁生效）、跨会话并行（不同任务）、一个标签页等长回答时另一个仍能列会话
+      （`ThreadingHTTPServer` 每连接一线程，`src/myagent/gateway/server.py:126`）
+
+## G.3 API 配置：掩码读、校验写、落 `.env`
+
+```text
+GET  /api/config  → config_payload()  掩码：api_key_hint = "sk-…wCr4"  src/myagent/gateway/config.py:64
+POST /api/config  → merge_config()    省略 = 不变，空串 = 清空          src/myagent/gateway/config.py:86
+                     └── LLMSettings(...)  校验在 __post_init__  src/myagent/config/settings.py:490
+                  → apply_config()    先校验、后写                  src/myagent/gateway/config.py:129
+                     ├── remember_env()  逐行改写 .env             src/myagent/config/env.py:124
+                     └── GatewayApp.reload()  重建 agent、关旧 runner src/myagent/gateway/app.py:156
+```
+
+* [x] Key 本身永不离开进程（`mask_api_key`，`src/myagent/gateway/config.py:55`）
+* [x] 密钥仍只有一条读取路径：`.env`（ADR-0004），不新增 `data/config.json`，不进 `localStorage`
+* [x] `myagent web` **不要求**先配好 Key——配置页就是给 Key 的地方（`src/myagent/cli.py:464`）
+
+## G.4 前端：零构建三件套
+
+| 文件 | 行数 | 说明 |
+| --- | ---: | --- |
+| `src/myagent/gateway/assets/index.html` | 99 | 侧栏（会话）+ 聊天区 + `<dialog>` 设置面板 |
+| `src/myagent/gateway/assets/app.js` | 388 | 三个渲染函数 + 一个 `fetch` 包装，无框架 |
+| `src/myagent/gateway/assets/style.css` | 403 | 暗色主题、两栏布局 |
+| `src/myagent/gateway/assets/favicon.svg` | 6 | 内联 SVG |
+
+* [x] 不引 Node / 打包器：改一个按钮不需要 `npm install`，别人克隆下来就能跑
+* [x] 模型输出只走 `textContent`（`src/myagent/gateway/assets/app.js:62`），因此不需要 sanitizer
+* [x] `localStorage` 只存会话 key（`src/myagent/gateway/assets/app.js:187`）
+* [x] `tool` 消息不单独成气泡，工具名进 meta 行（`src/myagent/gateway/assets/app.js:93`）
+* [x] 每轮显示 Phase 6 的上下文账本（`上下文 2488/122880 token`，读 `/api/chat` 的 `context` 字段）
+
+## G.5 安全边界（默认拒绝）
+
+| 措施 | 实现 |
+| --- | --- |
+| 只绑 loopback | `DEFAULT_HOST = "127.0.0.1"`（`src/myagent/gateway/server.py:55`） |
+| 挡 DNS rebinding | `Host` 必须是 loopback（`host_is_loopback`，`src/myagent/gateway/server.py:85`） |
+| 挡跨源页面 | `Origin` 非 loopback 即 403（`origin_is_loopback`，`:104`）；不返回 CORS 头 |
+| 挡跨站表单 | 写接口只收 `application/json`（`_read_json`，`:243`），否则 415 |
+| 请求体限长 | `MAX_BODY_BYTES = 1 MiB`（`:58`），缺 `Content-Length` 即 411（`:332`） |
+| 静态资源 | 扁平文件名白名单，防目录穿越（`Assets.path_for`，`src/myagent/gateway/assets.py:50`） |
+| 凭据 | 只回掩码（`src/myagent/gateway/config.py:55`） |
+
+* [x] `--allow-remote` 是唯一解除 loopback 检查的开关，且启动时打印警告
+      （`src/myagent/gateway/server.py:308`）——无认证是**明说的限制**
+* [x] 上述每一项都有负例测试（`tests/gateway/test_server.py`：403 / 411 / 413 / 415 / 405 / 404）
+
+## 阶段产出
+
+```text
+src/myagent/gateway/
+├── server.py    # HTTP 路由 / 安全边界 / Content-Length 纪律 / serve()
+├── app.py       # 与传输无关的应用层：bootstrap / config / sessions / chat
+├── config.py    # 配置掩码、校验、写回 .env
+├── runner.py    # ChatRunner：常驻事件循环线程
+├── assets.py    # 静态资源白名单
+├── errors.py    # GatewayError(status, message)
+└── assets/      # index.html / app.js / style.css / favicon.svg（零构建）
+docs/
+├── gateway-design.md
+├── decision-records/0011-local-gateway-and-webui.md
+└── records/phase-g-gateway-webui.md
+tests/gateway/{conftest,test_app,test_assets,test_chat_runner,test_config,test_server}.py
+tests/gateway_helpers.py
+```
+
+结果（2026-09-22）：`gateway/` 包 7 个 `.py`（1085 行）+ 4 个静态文件（896 行）；
+`myagent web` 子命令（`src/myagent/cli.py:464`）；测试 641 → 799 项，覆盖率仍 100%
+（4578 stmts / 1096 branches）；运行依赖未变（`pyproject.toml:22` 仍是 4 条）。
+详见 `docs/records/phase-g-gateway-webui.md`。
+
+## 验收标准
+
+* [x] 浏览器里能和同一个 agent 对话：网关发起的 turn 真的调用了工具
+      → `tools_used: ["current_time", "calculator"]`，回答 `7*6 = 42`、时间戳来自真实时钟
+      （`docs/records/phase-g-gateway-webui.md` §7.2）
+* [x] 页面能看 / 改 API 配置并写回 `.env`
+      → `api_key_hint: "sk-…wCr4"`（§7.3）；`tests/gateway/test_config.py` 覆盖
+      「校验 → `remember_env` → `reload`」与「坏值不写盘」
+* [x] 能在页面上列出 / 打开 / 删除会话，且与 CLI 同源
+      → `GET /api/sessions` 同时列出 `web:default` 与 `cli:*`（§7.3）
+* [x] 前端真实可渲染、可发消息
+      → 无头 `app.js` 冒烟：12 → 14 个气泡、上下文徽标 `2488/122880`、
+      设置面板 `连接成功：deepseek-v4.1-flash 回复 "pong"`（§7.4）
+* [x] 默认不可从别的机器访问
+      → `Host: evil.example` 与 `Origin: http://evil.example` 都是 403（§7.5）
+* [x] 不新增运行依赖、不引入 Node 构建（ADR-0011）
+* [x] `scripts/check.sh` 全绿
+      → `799 passed`，覆盖率 4578 stmts / 1096 branches，100%（`docs/records/phase-g-gateway-webui.md` §8）
+
+**答辩**（答案写进 `docs/gateway-design.md` §11）
+
+> 为什么不用 FastAPI / aiohttp？
+
+> 浏览器直连本地端口，安全边界在哪？
+
+> UI 和 CLI 会不会变成两套状态？
+
+结论（证据见 `docs/records/phase-g-gateway-webui.md` §7～§8）：
+
+1. **浏览器是传输层，不是第二个 runtime**：只有一份装配（`src/myagent/runtime.py:47`）、
+   一份配置（`.env`）、一个会话目录（`data/sessions/`），所以网页里的对话在 CLI 里看得见；
+2. **`ChatRunner` 是必需的而不是优化**：会话锁绑定 loop（`src/myagent/agent/loop.py:320`），
+   常驻 loop（`src/myagent/gateway/runner.py:37`）让同会话串行、跨会话并行，
+   并且修掉了「第二条消息必崩」；
+3. **9 条路由 + 标准库够用**：不引框架的代价是手写 HTTP 纪律（`Content-Length`、
+   拒绝未读 body 时关连接），但那份纪律是可测的（§7.5），收益是运行依赖仍是 4 条；
+4. **默认拒绝的安全边界可验收**：loopback + `Host`/`Origin` + 仅 JSON + 静态白名单 + Key 掩码，
+   每一项都有负例测试——无认证是明说的限制而不是隐藏的假设；
+5. **零构建前端也能覆盖核心路径**：真实 `app.js` 在无头环境里渲染历史（工具名进 meta 行）、
+   发消息、显示上下文徽标、保存 / 测试配置（§7.4）。
+
+记录：`docs/records/phase-g-gateway-webui.md`
 
 ---
 

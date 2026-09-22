@@ -86,7 +86,7 @@ Consolidator：Episodic → Semantic（src/myagent/memory/consolidator.py:92，`
 三个配套类型：
 
 - `MemoryHit`（`src/myagent/memory/types.py:144`）= `record` + `score` + `reason`；
-  `reason` 是 `"vector"` 或 `"keyword"`，CLI 直接打印成 `via=vector`（`src/myagent/cli.py:180`）。
+  `reason` 是 `"vector"` 或 `"keyword"`，CLI 直接打印成 `via=vector`（`src/myagent/cli.py:203`）。
 - `MemoryContext`（`src/myagent/memory/types.py:157`）= 一次召回的完整结果：`hits` / `degraded` / `note`。
   `degraded=True` 表示"向量库不可用，答案只来自关键词"，`note` 是给人看的原因。
 - `parse_datetime` / `utcnow`（`src/myagent/memory/types.py:49`、`:59`）：SQLite 边界上只认 ISO8601 字符串。
@@ -290,15 +290,15 @@ AgentLoop（src/myagent/agent/loop.py:132 收 memory）
 ## 8. CLI（PLAN 4.9）
 
 ```bash
-myagent memory list --kind semantic -n 20     # 看记住了什么（src/myagent/cli.py:158）
-myagent memory search "我的研究方向" -k 5      # 召回 + 分数 + 来源路径（src/myagent/cli.py:171）
-myagent memory add "用户偏好 Python" --kind semantic --importance 0.8   # 手工写一条（src/myagent/cli.py:188）
-myagent memory consolidate --dry-run          # 只看会合并什么（src/myagent/cli.py:214）
-myagent memory forget <memory_id>             # 删除一条（src/myagent/cli.py:227）
+myagent memory list --kind semantic -n 20     # 看记住了什么（src/myagent/cli.py:181）
+myagent memory search "我的研究方向" -k 5      # 召回 + 分数 + 来源路径（src/myagent/cli.py:194）
+myagent memory add "用户偏好 Python" --kind semantic --importance 0.8   # 手工写一条（src/myagent/cli.py:211）
+myagent memory consolidate --dry-run          # 只看会合并什么（src/myagent/cli.py:237）
+myagent memory forget <memory_id>             # 删除一条（src/myagent/cli.py:250）
 ```
 
 `memory search` 会打印 `score=0.686 via=vector` 这样的行，并在降级时把
-`note` 打到 stderr（`src/myagent/cli.py:180`）——"没有结果"和"向量库不可用"必须能区分开。
+`note` 打到 stderr（`src/myagent/cli.py:203`）——"没有结果"和"向量库不可用"必须能区分开。
 
 ## 9. 已知限制与不做什么
 

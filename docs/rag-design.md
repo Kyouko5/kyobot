@@ -25,7 +25,7 @@
 
 ```text
 myagent ingest a.pdf b.md
-   └── src/myagent/cli.py:195 _rag_ingest → RagPipeline.ingest（src/myagent/rag/pipeline.py:171）
+   └── src/myagent/cli.py:218 _rag_ingest → RagPipeline.ingest（src/myagent/rag/pipeline.py:171）
          ① load_document            （src/myagent/rag/loader.py:195）按后缀选 Loader
          ② FixedSizeChunker.split   （src/myagent/rag/chunker.py:86）  段落 → 句子 → 字符
          ③ BaseEmbedder.embed       （src/myagent/rag/embedder.py:167）批量 16 + 重试 3 次
@@ -34,7 +34,7 @@ myagent ingest a.pdf b.md
          ⑥ QdrantVectorStore.upsert （src/myagent/rag/vectorstore.py:143）
 
 myagent search "问题" -k 5
-   └── src/myagent/cli.py:217 _rag_search → RagPipeline.retrieve（src/myagent/rag/pipeline.py:240）
+   └── src/myagent/cli.py:240 _rag_search → RagPipeline.retrieve（src/myagent/rag/pipeline.py:240）
          → VectorRetriever.retrieve（src/myagent/rag/retriever.py:84）
             embed(query) → vectorstore.search → 回 SQLite 解析命中
          → BaseReranker.rerank（src/myagent/rag/reranker.py:29）
@@ -141,7 +141,7 @@ Phase 6 的预算直接复用同一个函数）。
 `EMBED_DIM` 留空时，第一次摄取**用一次真实调用观察 `len(vector)`**，然后：
 
 1. 写回 `.env`（`src/myagent/config/env.py:124` 的 `remember_env`，逐行替换 `EMBED_DIM=`）；
-2. 写进报告，CLI 打印 `embedding dim=1024 (probed, written to .env)`（`src/myagent/cli.py:212`）；
+2. 写进报告，CLI 打印 `embedding dim=1024 (probed, written to .env)`（`src/myagent/cli.py:235`）；
 3. 用这个数字建 collection（`src/myagent/rag/pipeline.py:187`）。
 
 为什么值得为此写文件：**collection 是为一个维度建的**。向量库不会「自动适配」，

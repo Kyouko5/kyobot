@@ -18,6 +18,7 @@
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ✅ 已完成 |
 | Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ✅ 已完成 |
 | Phase 6 | Context Manager 重构：优先级与预算 | ✅ 已完成 |
+| Phase G | 浏览器 UI + 本地 Gateway（`myagent web`） | ✅ 已完成 |
 | Phase 7 | 垂直领域 Agent | ⬜ 未开始 |
 | Phase 8 | Evaluation Pipeline | ⬜ 未开始 |
 | Phase 9 | 工程化：测试、Logging、Docker | ⬜ 未开始 |
@@ -54,6 +55,11 @@ myagent docs delete <document_id>           # 删一篇（向量 + 行一起删�
 # 6. 上下文预算与压缩（Phase 6）
 myagent chat --show-context -m "现在几点？"   # 打印七个 section 的 budget/used/dropped，再给答案
 myagent session compact cli:default          # 把旧轮换成一个摘要检查点（--keep-recent 控制保留几轮）
+
+# 7. 浏览器 UI（Phase G）：同一份 .env、同一个 agent、同一个 data/sessions/
+myagent web                  # 起本地 gateway 并打开 http://127.0.0.1:8080
+myagent web --port 9000 --no-open   # 换端口 / 不自动开浏览器
+myagent web --allow-remote   # 允许别的机器访问（无认证，会打印警告）
 ```
 
 Phase 3 之后的 Framework V2 可以独立运行，且**模块可替换、依赖可注入**：契约用 `Protocol`
@@ -104,6 +110,11 @@ api_key = require_env("LLM_API_KEY")  # 未填则抛 MissingEnvError，不会静
 PYTHONPATH=src python3 -m pytest
 ```
 
+浏览器 UI 用的是**标准库 `http.server`**，默认只监听 `127.0.0.1`、校验 `Host` / `Origin`，
+无认证也无需配置：`myagent web` 起来时 `.env` 里没有 Key 也能用，配置页就是给 Key 的地方。
+选型、安全边界与「为什么不用 FastAPI / WebSocket / Node」见
+[`docs/decision-records/0011-local-gateway-and-webui.md`](./docs/decision-records/0011-local-gateway-and-webui.md)。
+
 ## 目录结构
 
 ```text
@@ -121,8 +132,9 @@ kyobot/
 │   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding / Memory / RAG）
 │   ├── observability/          # 日志等可观测性基础件
 │   ├── tokens.py               # 全框架共用的 token 估算
-│   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs（只调用 build_*）
-├── tests/                      # pytest 测试（641 项，覆盖率 100%；tests/rag/ 全部离线）
+│   ├── gateway/                # 本地 Gateway + 浏览器 UI（Phase G）：server / app / config / runner / assets.py / errors.py + assets/（HTML/CSS/JS，零构建）
+│   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs|session|web（只调用 build_*）
+├── tests/                      # pytest 测试（799 项，覆盖率 100%；tests/rag/ 与 tests/gateway/ 全部离线，只有 test_server.py 绑 loopback）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
 │   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
@@ -134,6 +146,7 @@ kyobot/
 │   ├── memory-design.md        # 分层记忆：分层表 / 存储 / 写入策略 / 检索 / 巩固（Phase 4）
 │   ├── rag-design.md           # RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 引用（Phase 5）
 │   ├── context-design.md       # 上下文：优先级 / 预算 / 四步拟合 / 压缩 / 答辩（Phase 6）
+│   ├── gateway-design.md       # 本地 Gateway 与浏览器 UI：请求路径 / 路由 / 安全边界 / 与上游对照（Phase G）
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
 │   └── records/                # 阶段工作记录
@@ -155,6 +168,7 @@ kyobot/
 | Agent Runtime | 自研（对照 nanobot 的 Loop / Runner 拆分重新抽象） | ADR-0001、ADR-0002 |
 | 模型客户端 | `openai>=1.50`（AsyncOpenAI），只被 `models/openai_compat.py` 依赖 | ADR-0006 |
 | CLI | 标准库 `argparse`（不引 typer / rich / click） | ADR-0006 |
+| 浏览器 UI 与本地 Gateway | 标准库 `http.server` + 零构建 HTML/CSS/JS（不引 FastAPI / WebSocket / Node） | ADR-0011 |
 
 ## 文档索引
 
@@ -194,8 +208,14 @@ kyobot/
 - [`docs/records/phase-6-context.md`](./docs/records/phase-6-context.md)：Phase 6 工作记录（预算裁剪表、压缩前后对比与探针、开关 ON/OFF、真实服务 transcript 与质量门）。
 - [`scripts/context_experiment.py`](./scripts/context_experiment.py)：跑出上面三张表的实验脚本（`--offline` 跳过需要模型的压缩段）。
 
+**浏览器 UI 与本地 Gateway（Phase G 产出）**
+
+- [`docs/gateway-design.md`](./docs/gateway-design.md)：一条请求的完整路径、9 条路由、代码布局、安全边界、前端三件套的取舍，以及与上游 nanobot webui 的对照表。
+- [`docs/decision-records/0011-local-gateway-and-webui.md`](./docs/decision-records/0011-local-gateway-and-webui.md)：为什么用标准库而不是 FastAPI/aiohttp、为什么不用 WebSocket、为什么前端零构建、loopback-only 与无认证的边界、`ChatRunner` 为什么必须存在。
+- [`docs/records/phase-g-gateway-webui.md`](./docs/records/phase-g-gateway-webui.md)：Phase G 工作记录（真实服务 transcript、无头 UI 冒烟、安全负例、质量门，以及五个实现中发现的真实问题）。
+
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 1195 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 1332 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 
@@ -206,6 +226,7 @@ kyobot/
 - [`docs/decision-records/0004-secrets-and-env-files.md`](./docs/decision-records/0004-secrets-and-env-files.md)：密钥与环境变量的唯一读取路径。
 - [`docs/decision-records/0005-embedding-provider.md`](./docs/decision-records/0005-embedding-provider.md)：Embedding 提供方与模型。
 - [`docs/decision-records/0008-layered-memory.md`](./docs/decision-records/0008-layered-memory.md)：分层记忆的存储、写入策略与巩固游标。
+- [`docs/decision-records/0011-local-gateway-and-webui.md`](./docs/decision-records/0011-local-gateway-and-webui.md)：本地 Gateway 的传输层、前端交付方式与安全边界。
 - [`docs/records/`](./docs/records)：每个阶段的工作记录（问题 → Baseline → 方案 → 实现 → 实验 → 结果 → 结论）。
 
 ## 上游致谢

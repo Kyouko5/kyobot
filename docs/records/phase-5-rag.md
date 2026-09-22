@@ -284,7 +284,7 @@ embedding 可调用、collection 维度一致"）。Phase 5 的 CLI 只有 `chat
 
 ### 8.2 `myagent search` 的一条错误分支在生产路径上走不到
 
-**现象**：覆盖率报告指出 `src/myagent/cli.py:223` 的 `except MissingEnvError: return 2` 从未执行。
+**现象**：覆盖率报告指出 `src/myagent/cli.py:246` 的 `except MissingEnvError: return 2` 从未执行。
 
 **根因**：`VectorRetriever._embed`（`src/myagent/rag/retriever.py:123`）把 provider 的一切失败
 （含缺凭据的 `MissingEnvError`）都翻译成 `EmbeddingError`，所以这条分支在"只装了假件"的

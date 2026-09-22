@@ -7,8 +7,8 @@
   [`docs/records/phase-6-context.md`](./records/phase-6-context.md)（实验与质量门）
 - 代码入口：`src/myagent/agent/context.py`（section 模型 + 四步拟合）、
   `src/myagent/agent/compaction.py`（摘要检查点）、`src/myagent/agent/token_budget.py`（token 估算）；
-  装配点 `src/myagent/runtime.py:47`（`build_agent`）、CLI 入口 `src/myagent/cli.py:441`（`chat`）与
-  `src/myagent/cli.py:281`（`session compact`）
+  装配点 `src/myagent/runtime.py:47`（`build_agent`）、CLI 入口 `src/myagent/cli.py:479`（`chat`）与
+  `src/myagent/cli.py:304`（`session compact`）
 
 ## 0. 一句话
 
@@ -38,7 +38,7 @@ Phase 5 结束时，Context 已经能把记忆与文档拼进 prompt，但**超�
 
 ```text
 myagent chat -m "问题" --show-context
-  └── src/myagent/cli.py:441 _chat
+  └── src/myagent/cli.py:479 _chat
         ├── build_agent()                          src/myagent/runtime.py:47
         │      └── SectionedContextManager(        src/myagent/runtime.py:93
         │              budget=resolved_runtime.context_budget,   ← AgentRuntimeConfig.context_budget
@@ -57,14 +57,14 @@ myagent chat -m "问题" --show-context
                           ├── _repair()            src/myagent/agent/context.py:729   ②③ 结构
                           └── 校验 + _report()     src/myagent/agent/context.py:756   ④ 报告
               → AgentRunner.run() → _save_turn() → _prepare_outbound()
-  └── cli._context_transcript()                    src/myagent/cli.py:460 打印每段的 budget/used/dropped
+  └── cli._context_transcript()                    src/myagent/cli.py:498 打印每段的 budget/used/dropped
 ```
 
 压缩走的是另一条路（不在请求路径上，因为它要调用模型）：
 
 ```text
 myagent session compact cli:default --keep-recent 2
-  └── src/myagent/cli.py:281 _session_compact
+  └── src/myagent/cli.py:304 _session_compact
         ├── compact_session(session, ModelSummarizer(model))   src/myagent/agent/compaction.py:129
         │     ├── boundary_for_turns(messages, 2)              src/myagent/agent/compaction.py:174
         │     └── ModelSummarizer.summarize(archived)          src/myagent/agent/compaction.py:112
@@ -159,7 +159,7 @@ input_budget = context_window_tokens - max_output_tokens - 1024（安全余量�
 每段的 `budget / used / dropped / action`，外加总量与 `summary_line()`
 （`src/myagent/agent/context.py:301`）。有降级动作时写一条 info 日志
 （`src/myagent/agent/context.py:510`，Phase 9 会把它结构化）。CLI 用
-`--show-context` 打印同一份报告（`src/myagent/cli.py:460`）。
+`--show-context` 打印同一份报告（`src/myagent/cli.py:498`）。
 
 ## 5. 结构修复：顺序不能反（PLAN 6.3）
 
@@ -199,7 +199,7 @@ runner 按普通 `LLMError` 处理，Loop 在 build 阶段捕获它并把这一�
 
 | 触发 | 何时发生 | 谁做 | 现状 |
 | --- | --- | --- | --- |
-| 显式 | `myagent session compact <key>` | `compact_session` + `SessionStore.commit_summary` | ✅ `src/myagent/cli.py:281`、`src/myagent/agent/compaction.py:129` |
+| 显式 | `myagent session compact <key>` | `compact_session` + `SessionStore.commit_summary` | ✅ `src/myagent/cli.py:304`、`src/myagent/agent/compaction.py:129` |
 | 自动 | `conversation` 超 35% 配额 | `SectionedContextManager.compact`（只丢最旧轮，不调模型） | ✅ `src/myagent/agent/context.py:523`、`:643` |
 | 空闲 | 会话空闲一段时间后 | 上游 `agent/autocompact.py:68` 的定时器 | ❌ **默认关闭**（没有调度器，见 §9） |
 
@@ -340,7 +340,7 @@ AgentLoop(
 | 摘要没有二次校验 | 只校验「非空」；把摘要与原文对照检查（或让模型自评）留给 Phase 8 | `src/myagent/agent/compaction.py:125` |
 | 裁剪粒度是「整轮 / 整条 / 整块」 | 不做消息内截断（除了摘要），因为消息被截一半更容易让模型困惑 | `src/myagent/agent/context.py:876` 的 `_drop_turn_size` |
 | 不做多模态 token 与工具结果的重新摘要 | 工具结果进对话时就按 `max_tool_result_chars` 截断（Phase 2 的职责） | `src/myagent/agent/runner.py` |
-| CLI 只压一个会话 | `session compact <key>` 是单会话命令；批量运维留给 Phase 9 | `src/myagent/cli.py:281` |
+| CLI 只压一个会话 | `session compact <key>` 是单会话命令；批量运维留给 Phase 9 | `src/myagent/cli.py:304` |
 
 ## 10. 与上游 nanobot 的对照
 
