@@ -4,7 +4,7 @@
 - 关联文档：[`docs/agent-loop.md`](./agent-loop.md)（上游的上下文与工具机制）、
   [`docs/decision-records/0009-chunking-and-retrieval.md`](./decision-records/0009-chunking-and-retrieval.md)（决策）、
   [`docs/records/phase-5-rag.md`](./records/phase-5-rag.md)（实验与质量门）
-- 代码入口：`src/myagent/rag/`（9 个文件 1222 行）；装配点 `src/myagent/runtime.py:117`（`build_rag`）
+- 代码入口：`src/myagent/rag/`（9 个文件 1222 行）；装配点 `src/myagent/runtime.py:151`（`build_rag`）
 
 ## 0. 一句话
 
@@ -25,7 +25,7 @@
 
 ```text
 myagent ingest a.pdf b.md
-   └── src/myagent/cli.py:157 _rag_ingest → RagPipeline.ingest（src/myagent/rag/pipeline.py:142）
+   └── src/myagent/cli.py:195 _rag_ingest → RagPipeline.ingest（src/myagent/rag/pipeline.py:171）
          ① load_document            （src/myagent/rag/loader.py:195）按后缀选 Loader
          ② FixedSizeChunker.split   （src/myagent/rag/chunker.py:86）  段落 → 句子 → 字符
          ③ BaseEmbedder.embed       （src/myagent/rag/embedder.py:167）批量 16 + 重试 3 次
@@ -34,11 +34,11 @@ myagent ingest a.pdf b.md
          ⑥ QdrantVectorStore.upsert （src/myagent/rag/vectorstore.py:143）
 
 myagent search "问题" -k 5
-   └── src/myagent/cli.py:179 _rag_search → RagPipeline.retrieve（src/myagent/rag/pipeline.py:211）
+   └── src/myagent/cli.py:217 _rag_search → RagPipeline.retrieve（src/myagent/rag/pipeline.py:240）
          → VectorRetriever.retrieve（src/myagent/rag/retriever.py:84）
             embed(query) → vectorstore.search → 回 SQLite 解析命中
          → BaseReranker.rerank（src/myagent/rag/reranker.py:29）
-         → RagPipeline.build_context（src/myagent/rag/pipeline.py:219）
+         → RagPipeline.build_context（src/myagent/rag/pipeline.py:270）
 ```
 
 四个契约都是 Phase 3 立好的（`BaseLoader` 是 Phase 5 新增的第五个）：
@@ -141,15 +141,15 @@ Phase 6 的预算直接复用同一个函数）。
 `EMBED_DIM` 留空时，第一次摄取**用一次真实调用观察 `len(vector)`**，然后：
 
 1. 写回 `.env`（`src/myagent/config/env.py:124` 的 `remember_env`，逐行替换 `EMBED_DIM=`）；
-2. 写进报告，CLI 打印 `embedding dim=1024 (probed, written to .env)`（`src/myagent/cli.py:174`）；
-3. 用这个数字建 collection（`src/myagent/rag/pipeline.py:158`）。
+2. 写进报告，CLI 打印 `embedding dim=1024 (probed, written to .env)`（`src/myagent/cli.py:212`）；
+3. 用这个数字建 collection（`src/myagent/rag/pipeline.py:187`）。
 
 为什么值得为此写文件：**collection 是为一个维度建的**。向量库不会「自动适配」，
 写错的表现不是报错，而是「检索永远返回空」——一个很难倒查的失败。
 所以 `ensure_collection`（`src/myagent/rag/vectorstore.py:115`）是幂等 + **带维度检查**的：
 已存在且维度一致就跳过；已存在但维度不一致就报出两个数字
 （`EMBED_DIM is 1024 but the embedding model '…' returned 768-dimensional vectors`，
-`src/myagent/rag/pipeline.py:191` 与 `src/myagent/rag/vectorstore.py:115` 各拦一道，
+`src/myagent/rag/pipeline.py:220` 与 `src/myagent/rag/vectorstore.py:115` 各拦一道，
 前者拦「配置与模型不符」，后者拦「模型与已有集合不符」）。
 
 `remember_env` 直接写 `os.environ`（让本次运行立刻看到新值）**再**改 `.env`；
@@ -224,7 +224,7 @@ query ─ embed ─► vector ─ search ─► hits（payload 里的 chunk_id�
 
 ## 8. Pipeline 与 CLI（PLAN 5.8）
 
-`RagPipeline`（`src/myagent/rag/pipeline.py:101`）是唯一的门面，四个方法：
+`RagPipeline`（`src/myagent/rag/pipeline.py:130`）是唯一的门面，四个方法：
 
 | 方法 | 语义 |
 | --- | --- |
@@ -241,7 +241,7 @@ myagent docs list                 # 文档 id / 块数 / 页数 / 时间 / 来�
 myagent docs delete <document_id> # 删文档：向量 + 行（chunks 级联）
 ```
 
-`build_context` 的形状是刻意无聊的（`src/myagent/rag/pipeline.py:219`）：
+`build_context` 的形状是刻意无聊的（`src/myagent/rag/pipeline.py:270`）：
 
 ```text
 [a8361ccbbb4d80a2#8] 开发规范 (no page)
@@ -255,7 +255,7 @@ myagent docs delete <document_id> # 删文档：向量 + 行（chunks 级联）
 **人肉定位线索**（页码或标题）。形状稳定有两个好处：Phase 6 能算它占多少预算，
 不同实验的测量结果互相可比（`docs/records/phase-5-rag.md` §6.3 就用它算「答案词进入上下文的比例」）。
 
-装配在 `build_rag`（`src/myagent/runtime.py:116`）：和 `build_memory` 并列，
+装配在 `build_rag`（`src/myagent/runtime.py:151`）：和 `build_memory` 并列，
 因为 `ingest` / `search` 需要 RAG 而不需要聊天模型，且两个入口必须读同一个 SQLite 文件、
 同一个 Qdrant collection、同一份嵌入配置。`embedder` 可注入，实验与测试都靠这个口子。
 
@@ -271,7 +271,7 @@ myagent docs delete <document_id> # 删文档：向量 + 行（chunks 级联）
 | `MYAGENT_RAG_TOP_K` | 5 | 检索返回几块 |
 | `MYAGENT_QDRANT_COLLECTION` | `myagent_documents` | 文档块集合（与记忆集合分开，ADR-0008） |
 
-`RagSettings`（`src/myagent/config/settings.py:354`）在构造时就拒绝非法组合：
+`RagSettings`（`src/myagent/config/settings.py:356`）在构造时就拒绝非法组合：
 `chunk_overlap >= chunk_size`、非正的 `chunk_size` / `top_k` 都直接 `ValueError`——
 配置错误应该在启动时炸，而不是在检索结果变差时才被发现。
 
@@ -304,7 +304,7 @@ Phase 7 的真实论文检索会走本阶段的 `RagPipeline` **或者**把它�
 
 一条代码层面的联系：`src/myagent/memory/embedder.py` 在 Phase 5 **被删掉并搬到**
 `src/myagent/rag/embedder.py`。嵌入能力属于 RAG，记忆只是使用者；
-依赖方向因此是 `memory → rag`（`src/myagent/runtime.py:106` 用 `build_embedder`），
+依赖方向因此是 `memory → rag`（`src/myagent/runtime.py:140` 用 `build_embedder`），
 而不是两个模块各持一份传输层。行为一字未改，只是路径变了（Phase 4 的测试只改了 import）。
 
 ## 12. 已知限制与明确不做

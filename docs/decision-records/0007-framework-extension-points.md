@@ -29,29 +29,29 @@ PLAN 3.4 要求为六个扩展点（`BaseModel` / `BaseTool` / `BaseMemory` / `B
    `BaseMemory`（`src/myagent/memory/base.py:30`）、`BaseEmbedder`（`src/myagent/rag/embedder.py:74`）、
    `BaseVectorStore`（`src/myagent/rag/vectorstore.py:63`）、`BaseRetriever`
    （`src/myagent/rag/retriever.py:43`）。
-   另外两个同样是 Protocol 的 Loop 边界：`ContextManager`（`src/myagent/agent/context.py:191`）
-   与 `SessionStore`（`src/myagent/session/base.py:44`）——PLAN 只在 3.4 列了六个扩展点，
+   另外两个同样是 Protocol 的 Loop 边界：`ContextManager`（`src/myagent/agent/context.py:401`）
+   与 `SessionStore`（`src/myagent/session/base.py:51`）——PLAN 只在 3.4 列了六个扩展点，
    这两个是 3.2/3.3 的产物，但决策相同，一并记在这里。
 2. **ABC 不算被禁用，而是降级为「可选的便利实现」**：`Tool(ABC)`
    （`src/myagent/tools/base.py:187`）实现 `BaseTool` 的 schema / 类型纠正 / 校验，
-   内置工具继承它省代码；不继承也完全可用（`tests/test_contracts.py:70` 的 `DuckTool`
+   内置工具继承它省代码；不继承也完全可用（`tests/test_contracts.py:72` 的 `DuckTool`
    是一个不继承任何东西的假工具，registry 与 runner 照常驱动它）。
-3. **装配收敛到一处**：`myagent.runtime.build_agent()`（`src/myagent/runtime.py:41`）
+3. **装配收敛到一处**：`myagent.runtime.build_agent()`（`src/myagent/runtime.py:47`）
    是唯一知道「哪个类实现哪个契约」的地方；核心模块只 import 契约。
 4. **契约由测试守住，而不是靠约定**：`tests/test_contracts.py` 用两个手段固定这条边界——
-   每个契约一个不继承任何东西的最小实现（`tests/test_contracts.py:55` 起），
-   以及 AST 级别的 import 检查（`tests/test_contracts.py:435`）。
+   每个契约一个不继承任何东西的最小实现（`tests/test_contracts.py:57` 起），
+   以及 AST 级别的 import 检查（`tests/test_contracts.py:484`）。
 
 ## 理由
 
 - **结构类型把「实现方」也解放了**：Phase 5 的 `QdrantVectorStore`、Phase 4 的分层 Memory
   都不需要继承我们的基类，甚至不 import `myagent`；只要形状对，`isinstance`/mypy 都认。
 - **依赖方向真的变成单向**：`agent/` 只 import 契约模块，`openai` / `qdrant_client` / `sqlite3`
-  只出现在实现文件里——`tests/test_contracts.py:435` 用 AST 遍历 import 语句来证明这一点，
+  只出现在实现文件里——`tests/test_contracts.py:441` 用 AST 遍历 import 语句来证明这一点，
   而不是靠 code review 记得住。
-- **替换实现零改动**：换模型只改 `.env`（`tests/test_contracts.py:387` 断言两个不同的
+- **替换实现零改动**：换模型只改 `.env`（`tests/test_contracts.py:393` 断言两个不同的
   `Settings` 装出两个 base_url 不同的 `OpenAICompatModel`，其余组件类型不变）；
-  加一个工具只调 `registry.register(...)`（`tests/test_contracts.py:322` 断言
+  加一个工具只调 `registry.register(...)`（`tests/test_contracts.py:328` 断言
   runner/loop 完全不知道新工具的存在）。
 - **`isinstance` 分支是被明确否掉的替代品**：一旦核心代码写成
   `if isinstance(x, QdrantVectorStore)`，每加一个实现都要回到核心改代码，
@@ -64,8 +64,8 @@ PLAN 3.4 要求为六个扩展点（`BaseModel` / `BaseTool` / `BaseMemory` / `B
 
 - **`runtime_checkable` 只检查成员是否存在，不检查签名**。`isinstance` 能过、调用时参数错，
   要到 mypy 或运行时才暴露。两个已知的边界都写成了测试：
-  `ScriptedModel` 只有 `generate`，因此**不**满足 `BaseModel`（`tests/test_contracts.py:274`）；
-  带数据成员的 Protocol 上 `issubclass` 会抛 `TypeError`（`tests/test_contracts.py:266`）。
+  `ScriptedModel` 只有 `generate`，因此**不**满足 `BaseModel`（`tests/test_contracts.py:280`）；
+  带数据成员的 Protocol 上 `issubclass` 会抛 `TypeError`（`tests/test_contracts.py:272`）。
   结论：**契约的成员一旦增加，所有 fake 都要跟上**，这是有意的摩擦。
 - **`Protocol` 不能带运行时状态**：需要默认实现或共享状态时就用 ABC（`Tool`）或组合
   （`SectionedContextManager` 持有 `workspace`），而不是把状态塞进契约。

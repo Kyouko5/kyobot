@@ -1,6 +1,6 @@
 # MyAgent 设计：Framework V2（模块可替换、依赖可注入）
 
-> **锚点约定**：`src/myagent/agent/loop.py:119` 指本仓库源码第 117 行；
+> **锚点约定**：`src/myagent/agent/loop.py:120` 指本仓库源码第 117 行；
 > 不带 `src/` 前缀的 `agent/loop.py:1594` 指上游只读参照 `nanobot/nanobot/agent/loop.py`。
 > 校验命令：`.venv/bin/python scripts/check_doc_anchors.py`。
 >
@@ -29,26 +29,26 @@ Phase 3 做了三件事：
    地方，CLI 只调用它（§3.13）。
 
 判定这三件事真的做到了，靠的不是文档而是 `tests/test_contracts.py`：它用 AST 检查核心模块的
-import（`tests/test_contracts.py:435`）、用不继承任何东西的假件驱动整条链路
-（`tests/test_contracts.py:305`）。
+import（`tests/test_contracts.py:484`）、用不继承任何东西的假件驱动整条链路
+（`tests/test_contracts.py:386`）。
 
 ## 1. 模块地图与依赖方向
 
 ```text
                     ┌──────────────────────────────────────────────┐
    用户 / CLI ──────▶│ runtime.build_agent(settings)                │  唯一装配点
-                    │ src/myagent/runtime.py:41                    │
+                    │ src/myagent/runtime.py:47                    │
                     └───────────────────┬──────────────────────────┘
                                         │ Settings（.env）→ 具体实现
                                         ▼
    MessageBus ──────▶┌──────────────────────────────────────────────┐
    （最小实现）        │ agent/loop.py  AgentLoop                     │
-   src/myagent/agent/loop.py:54  │ build → run → save → respond      │
-                     │ src/myagent/agent/loop.py:119                │
+   src/myagent/agent/loop.py:55  │ build → run → save → respond      │
+                     │ src/myagent/agent/loop.py:120                │
                      └──┬───────────┬──────────────┬────────────────┘
                         │           │              │
       ContextManager ◀──┘           │              └──▶ SessionStore
-      src/myagent/agent/context.py:191    src/myagent/session/base.py:44
+      src/myagent/agent/context.py:401    src/myagent/session/base.py:51
                                     ▼
                         AgentRunner（模型 ↔ 工具循环）
                         src/myagent/agent/runner.py:87
@@ -92,11 +92,11 @@ rag.*                 → rag.types / rag.loader / rag.chunker / rag.embedder /
 2. **核心不 import 第三方 SDK**：`openai` / `qdrant_client` / `sqlite3` / `httpx` 只允许出现在
    实现文件里。runner 只认 `LLMError` / `ContextWindowExceeded`
    （`src/myagent/models/base.py:31`、`:35`），换提供方 = 换一个 `BaseModel` 实现。
-   这条约束由 `tests/test_contracts.py:435` 的 AST 检查强制执行。
+   这条约束由 `tests/test_contracts.py:484` 的 AST 检查强制执行。
 3. **具体实现只在装配点碰面**：`myagent.runtime` 是唯一同时 import 契约与实现的模块
-   （`tests/test_contracts.py:446` 断言这一点），其余模块只认契约。
+   （`tests/test_contracts.py:495` 断言这一点），其余模块只认契约。
    同理，`agent` 也不依赖 `memory` / `rag` 的记录类型：检索结果以
-   `ContextItem(text, reference, score)`（`src/myagent/agent/context.py:75`）交给上下文（§3.8）。
+   `ContextItem(text, reference, score)`（`src/myagent/agent/context.py:161`）交给上下文（§3.8）。
 
 ### 1.1 文件职责
 
@@ -109,9 +109,11 @@ rag.*                 → rag.types / rag.loader / rag.chunker / rag.embedder /
 | `tools/registry.py` | 注册/暴露/准备/执行 | `ToolRegistry.prepare_call` `.execute` `.get_definitions` | `agent/tools/registry.py` |
 | `tools/builtin/` | 4 个内置工具（显式注册） | `build_default_registry` | `agent/loop.py:_register_default_tools` |
 | `agent/runner.py` | 模型↔工具循环 | `AgentRunSpec` `AgentRunResult` `AgentRunner` | `agent/runner.py` |
-| `agent/context.py` | 按 section 组装一次请求、估算 token、超预算报错；记忆的注入端口 | `ContextManager` `ContextSection` `SectionedContextManager` `ContextItem` `MemoryProvider` | `agent/context.py:89` + `agent/context_governance.py:336` |
+| `agent/context.py` | 按 section 组装 + 按预算裁剪 + 结构修复 + 报告；记忆/文档的注入端口 | `ContextManager` `ContextSection` `ContextBudget` `ContextReport` `SectionedContextManager` `ContextItem` `MemoryProvider` `DocumentProvider` | `agent/context.py:89` + `agent/context_governance.py:336` |
+| `agent/compaction.py` | 显式压缩：把旧轮换成一个摘要检查点（`ModelSummarizer` + 轮边界） | `compact_session` `ModelSummarizer` `boundary_for_turns` `CompactionResult` | `agent/memory.py:1103`（摘要）+ `session/manager.py:323`（检查点） |
+| `agent/token_budget.py` | 上下文用的 token 估算（消息/消息列表/截断），复用 `tokens.py` | `message_tokens` `messages_tokens` `truncate_to_tokens` `TokenCounter` | **上游没有独立模块**（内联在 `context_governance.py`） |
 | `agent/runtime.py` | 一轮的行为上限 | `AgentRuntimeConfig` | `config/schema.py:129` |
-| `session/base.py` | 会话契约：转录 + 压缩边界 | `Session` `SessionStore` `DEFAULT_SESSION_KEY` | `session/manager.py:344` 的 `get_history` |
+| `session/base.py` | 会话契约：转录 + 压缩边界 + 摘要检查点 | `Session` `SessionStore` `DEFAULT_SESSION_KEY` | `session/manager.py:344` 的 `get_history` |
 | `session/manager.py` | JSONL 实现 | `JsonlSessionStore` | `session/manager.py:JsonlSessionStore` |
 | `agent/loop.py` | 一轮对话的 4 阶段 + 会话锁 + 最小 Bus | `AgentLoop` `TurnContext` `MessageBus` | `agent/loop.py:AgentLoop`（7 阶段） |
 | `rag/` | 端到端 RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 编排与引用 | `RagPipeline` `FixedSizeChunker` `QdrantVectorStore` `VectorRetriever` `Document` `Chunk` | **上游没有**（无检索能力，纯增量） |
@@ -125,24 +127,29 @@ rag.*                 → rag.types / rag.loader / rag.chunker / rag.embedder /
 ```text
 myagent chat -m "算一下 (12+8)*3，再读一下 workspace/project-notes.md"
   │
-  │ cli._chat()                                   src/myagent/cli.py:349
-  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:352
-  │  └ loop = build_agent()                         src/myagent/cli.py:358
-  │     asyncio.run(loop.run_once(text, session_key))     src/myagent/cli.py:391
+  │ cli._chat()                                   src/myagent/cli.py:441
+  │  ├ 先校验 LLM_MODEL / LLM_API_KEY，缺了直接退出码 2   src/myagent/cli.py:444
+  │  └ loop = build_agent()                         src/myagent/cli.py:450
+  │     turn = asyncio.run(loop.run_turn(text, session_key))   src/myagent/cli.py:451
   ▼
-AgentLoop._process()                             src/myagent/agent/loop.py:156
-  │  async with self._session_lock(session_key):       ← 会话内串行（:247）
+AgentLoop._process()                             src/myagent/agent/loop.py:172
+  │  async with self._session_lock(session_key):       ← 会话内串行（:320）
+  │      _run_turn() 依次跑 4 个阶段                     src/myagent/agent/loop.py:176
   │
-  ├─[build]   _build_turn()                      src/myagent/agent/loop.py:166
+  ├─[build]   _build_turn()                      src/myagent/agent/loop.py:186
   │     self.sessions.get_or_create() → Session（JSONL 懒加载）
-  │     memories = await self._recall_memories(ctx)（Phase 4）  src/myagent/agent/loop.py:224
-  │     ContextRequest(user_input, history, memories, tools, session_key, budget_tokens)
-  │     self.context.build(request) → ContextBundle    src/myagent/agent/context.py:260
-  │       ├ 组装 5 个 section（system/conversation/memory/rag/tools）  :229
-  │       └ 估算总 token，超预算 → ContextBudgetExceeded        :271
-  │     捕获超预算 → ctx.error（本轮不发请求）           src/myagent/agent/loop.py:179
+  │     memories = await self._recall_memories(ctx)（Phase 4）  src/myagent/agent/loop.py:247
+  │     rag_chunks = await self._recall_documents(ctx)（Phase 5） src/myagent/agent/loop.py:262
+  │     ContextRequest(user_input, history, memories, rag_chunks,
+  │                    tools, session_key, budget_tokens, summary)
+  │     self.context.build(request) → ContextBundle    src/myagent/agent/context.py:497
+  │       ├ 组装 7 个 section（system/query/conversation/summary/memory/rag/tools）  :546
+  │       ├ 四步拟合：按配额裁剪 → 删孤儿 → 补缺 → 校验   :627 / :696 / :729
+  │       └ 合并成消息（文本段并成一条 system，query 恒在最后）  :597
+  │     装不下（连 required 都放不下）→ ContextWindowExceeded（:137，抛在 :510）
+  │     捕获 → ctx.error（本轮不发请求）                  src/myagent/agent/loop.py:201
   │
-  ├─[run]     _run_turn()                        src/myagent/agent/loop.py:186
+  ├─[run]     _run_turn_stage()                  src/myagent/agent/loop.py:209
   │     AgentRunSpec(messages, tools, model, 三个上限)
   │     └ AgentRunner.run()                      src/myagent/agent/runner.py:90
   │          for iteration in range(max_iterations):
@@ -154,29 +161,31 @@ AgentLoop._process()                             src/myagent/agent/loop.py:156
   │                 超长截断 / 错误回灌 → Message.tool(...)
   │            ⑤ 跑满上限 → 补一次「不带工具」的收尾请求
   │
-  ├─[save]    _save_turn()                       src/myagent/agent/loop.py:202
+  ├─[save]    _save_turn()                       src/myagent/agent/loop.py:225
   │     只追加本轮新增消息（系统提示永不落盘）→ data/sessions/cli%3Adefault.jsonl
-  │     await self._observe_turn(...)（Phase 4：把这一轮交给记忆）  loop.py:239
+  │     await self._observe_turn(...)（Phase 4：把这一轮交给记忆）  src/myagent/agent/loop.py:278
   │
-  └─[respond] _prepare_outbound()                src/myagent/agent/loop.py:252
+  └─[respond] _prepare_outbound()                src/myagent/agent/loop.py:291
         AgentRunResult → OutboundMessage(content, stop_reason, tools_used)
-        → run_once() 返回文本 / run() 投递到 bus
+        → run_turn() 返回 TurnContext / run() 投递到 bus
 ```
 
 关键点：
 
-- **四个阶段各自计时并打日志**（`src/myagent/agent/loop.py:272`，对应上游 `agent/loop.py:1689`）。
+- **四个阶段各自计时并打日志**（`src/myagent/agent/loop.py:311`，对应上游 `agent/loop.py:1689`）。
   一条 `MYAGENT_LOG_LEVEL=DEBUG` 的运行能看到 `build 0.2ms / run 4252.7ms / save 1.3ms / respond 0.0ms`。
 - **只有「本轮新增」的消息写盘**：`ContextBundle.transcript_start`
-  （`src/myagent/agent/context.py:149`）指向本轮的 user 消息，它之前的系统块（每轮重建）与已存历史
-  都不再重复落盘——`_save_turn`（`src/myagent/agent/loop.py:217`）只追加
+  （`src/myagent/agent/context.py:322`）指向本轮的 user 消息，它之前的系统块（每轮重建）与已存历史
+  都不再重复落盘——`_save_turn`（`src/myagent/agent/loop.py:225`）只追加
   `messages[transcript_start:]` 加 runner 新产出的消息。
-- **会话内串行、跨会话并发**：`_session_lock()`（`src/myagent/agent/loop.py:281`）按 session_key 缓存
+- **会话内串行、跨会话并发**：`_session_lock()`（`src/myagent/agent/loop.py:320`）按 session_key 缓存
   `asyncio.Lock`，与上游同一思路（`agent/loop.py:1391`、`agent/loop.py:2382`）。
-- **预算不足的一轮不发请求**：`build` 阶段捕获 `ContextBudgetExceeded`
-  （`src/myagent/agent/loop.py:179`）写进 `TurnContext.error`，`run` / `save` 直接返回
-  （`:183`、`:208`），`respond` 给出一句 `The request was not sent: ...`（`:223`）。
-  回归测试：`tests/test_loop.py:245`。
+- **预算不足的一轮不发请求**：Phase 6 会先裁剪、修结构（`src/myagent/agent/context.py:497`），
+  只有连 `system` / `query` 两个 required 段都放不下时才抛 `ContextWindowExceeded`
+  （`src/myagent/agent/context.py:137`）——`build` 阶段捕获它
+  （`src/myagent/agent/loop.py:201`）写进 `TurnContext.error`，`run` / `save` 直接返回
+  （`:210`、`:239`），`respond` 给出一句 `The request was not sent: ...`（`:296`）。
+  回归测试：`tests/test_loop.py:253`。
 
 ## 3. 模块契约
 
@@ -200,8 +209,8 @@ AgentLoop._process()                             src/myagent/agent/loop.py:156
 （`agent/loop.py:1865` 组装上下文的原料、`agent/loop.py:2014` 落盘）。
 
 代码上怎么保证「不负责」不是靠自觉：Loop 的构造函数只接受契约类型
-（`src/myagent/agent/loop.py:122`），而「核心模块不 import 具体实现 / SDK」由
-`tests/test_contracts.py:435`、`:442` 的 AST 检查兜底。
+（`src/myagent/agent/loop.py:123`），而「核心模块不 import 具体实现 / SDK」由
+`tests/test_contracts.py:484`、`:491` 的 AST 检查兜底。
 
 ### 3.2 六个扩展点（PLAN 3.4）
 
@@ -220,9 +229,9 @@ AgentLoop._process()                             src/myagent/agent/loop.py:156
 
 | 接口 | 位置 | 最小方法签名 | 实现者 |
 | --- | --- | --- | --- |
-| `ContextManager` | `src/myagent/agent/context.py:191` | `build(request) -> ContextBundle` / `compact(history) -> CompactionReport` | `SectionedContextManager` |
-| `MemoryProvider` | `src/myagent/agent/context.py:90` | `recall(query, session_key)` / `observe(session_key, messages)` | `MemoryManager`（Phase 4） |
-| `SessionStore` | `src/myagent/session/base.py:44` | `get_or_create` / `append` / `clear` / `known_keys` | `JsonlSessionStore` |
+| `ContextManager` | `src/myagent/agent/context.py:401` | `build(request) -> ContextBundle` / `compact(history) -> CompactionReport` | `SectionedContextManager` |
+| `MemoryProvider` | `src/myagent/agent/context.py:180` | `recall(query, session_key)` / `observe(session_key, messages)` | `MemoryManager`（Phase 4） |
+| `SessionStore` | `src/myagent/session/base.py:51` | `get_or_create` / `append` / `clear` / `known_keys` | `JsonlSessionStore` |
 
 签名如下（省略文档字符串）：
 
@@ -280,8 +289,8 @@ class BaseRetriever(Protocol):                 # src/myagent/rag/retriever.py:43
   理由在 `src/myagent/rag/retriever.py:1` 的模块注释里——Phase 8 的 `hit@k` 要用它）。
 - **ABC 没有被禁用，而是降级为便利实现**：`BaseTool` 是契约，`Tool(ABC)`
   （`src/myagent/tools/base.py:187`）是实现该契约的可选基类，内置工具继承它省掉
-  schema / 类型纠正 / 校验的样板；不继承也完全可用——`tests/test_contracts.py:70` 的
-  `DuckTool` 什么都不继承，registry 与 runner 照常驱动它（`tests/test_contracts.py:305`）。
+  schema / 类型纠正 / 校验的样板；不继承也完全可用——`tests/test_contracts.py:72` 的
+  `DuckTool` 什么都不继承，registry 与 runner 照常驱动它（`tests/test_contracts.py:386`）。
 
 完整决策（为什么不是 `isinstance` 分支、不是 ABC、不是 DI 容器）见
 `docs/decision-records/0007-framework-extension-points.md`。
@@ -331,7 +340,7 @@ class BaseModel(Protocol):                        # src/myagent/models/base.py:7
 | 凭据延迟到首次请求才解析 | `src/myagent/models/openai_compat.py:75` | `myagent tools` 等离线命令无需 key；测试可注入假客户端 |
 | 异常→框架错误集中翻译 | `src/myagent/models/openai_compat.py:128` | 超时/连接/鉴权/限流/上下文超限/其它 HTTP 错误各有独立文案 |
 | 认证类失败也识别为「上下文超限」 | `src/myagent/models/openai_compat.py:147` | 提供方既可能给 `error.code`，也可能只在文案里写 "maximum context length" |
-| 暴露只读 `settings` | `src/myagent/models/openai_compat.py:75` | 装配点建好的模型可以被检查（`tests/test_contracts.py:387` 用它证明「换模型只改 `.env`」） |
+| 暴露只读 `settings` | `src/myagent/models/openai_compat.py:75` | 装配点建好的模型可以被检查（`tests/test_contracts.py:436` 用它证明「换模型只改 `.env`」） |
 
 ### 3.5 tools/：契约 → ABC → 校验 → 执行
 
@@ -369,7 +378,7 @@ validate_schema_value()    :122                 JSON Schema 子集的校验实�
 
 **新增工具的成本**（PLAN 3 验收标准）：写一个满足 `BaseTool` 形状的类 →
 `registry.register(instance)`，runner 与 loop 一行不改。测试见
-`tests/test_contracts.py:322`（断言新工具的 schema 原样到达提供方）。
+`tests/test_contracts.py:366`（断言新工具的 schema 原样到达提供方）。
 
 ### 3.6 agent/runner.py：模型 ↔ 工具循环
 
@@ -411,14 +420,14 @@ class AgentRunResult:          # src/myagent/agent/runner.py:72
 | Hook | `src/myagent/agent/runner.py:40` | `on_iteration` / `on_tool_results` 两个观察点，为 Phase 3 的流式/进度留口 |
 
 Runner 与具体提供方无关：它的 import 里没有 `openai`，也没有 `myagent.models.openai_compat`
-（`tests/test_contracts.py:435`、`:442`），所以 `tests/test_contracts.py:305` 可以用一个不继承
+（`tests/test_contracts.py:484`、`:491`），所以 `tests/test_contracts.py:386` 可以用一个不继承
 任何东西的假工具 + 假模型跑完整条链路。
 
 **本阶段明确不做**（PLAN 2.4）：长度续写、畸形 tool_calls 重试、provider 原生状态、三阶段 checkpoint 恢复。
 
 ### 3.7 agent/loop.py：4 阶段 + 锁 + 最小 Bus
 
-构造签名（PLAN 3.2 的「不 new 任何具体对象」，`src/myagent/agent/loop.py:122`）：
+构造签名（PLAN 3.2 的「不 new 任何具体对象」，`src/myagent/agent/loop.py:123`）：
 
 ```python
 class AgentLoop:
@@ -436,23 +445,23 @@ class AgentLoop:
 
 | 阶段 | 位置 | 做什么 |
 | --- | --- | --- |
-| `build` | `src/myagent/agent/loop.py:166` | 取会话（`get_or_create`）+ 构造 `ContextRequest` + `context.build()` |
-| `run` | `src/myagent/agent/loop.py:186` | 构造 `AgentRunSpec` → `AgentRunner.run()` |
-| `save` | `src/myagent/agent/loop.py:202` | 只追加**本轮新增**消息（依赖 `transcript_start`）|
-| `respond` | `src/myagent/agent/loop.py:252` | `AgentRunResult` → `OutboundMessage`（含 stop_reason / tools_used） |
+| `build` | `src/myagent/agent/loop.py:186` | 取会话（`get_or_create`）+ 构造 `ContextRequest` + `context.build()` |
+| `run` | `src/myagent/agent/loop.py:209` | 构造 `AgentRunSpec` → `AgentRunner.run()` |
+| `save` | `src/myagent/agent/loop.py:225` | 只追加**本轮新增**消息（依赖 `transcript_start`）|
+| `respond` | `src/myagent/agent/loop.py:291` | `AgentRunResult` → `OutboundMessage`（含 stop_reason / tools_used） |
 
 与上游 7 阶段（`agent/loop.py:1594`）的差别：`restore`（崩溃恢复）与 `compact`（空闲压缩）
 合并进 `build`，并且 V1 没有 `command` 阶段——`/exit`、`/session`、`/clear` 由 CLI 自己处理
 （上游把命令放在模型调用之前的原因是一样的：命令必须在模型不可用时也能生效）。
 
-`MessageBus`（`src/myagent/agent/loop.py:54`）是 Phase 2 的最小实现：两个 `asyncio.Queue`，
-`run()`（`src/myagent/agent/loop.py:148`）消费到 `None` 哨兵就返回。上游的 Bus 要负责
+`MessageBus`（`src/myagent/agent/loop.py:55`）是 Phase 2 的最小实现：两个 `asyncio.Queue`，
+`run()`（`src/myagent/agent/loop.py:164`）消费到 `None` 哨兵就返回。上游的 Bus 要负责
 5 种频道、cron、子 agent 的扇出，V1 只需要「一条进、一条出」。
 
 **失败的一轮也走完 4 个阶段**（这是有意的）：模型调用失败时 runner 返回
 `stop_reason="error"` 而不是抛异常（`src/myagent/agent/runner.py:104`），于是 `save` 仍会写下
 这条用户消息，`respond` 给出一句可读的 `The model call failed: ...`
-（`src/myagent/agent/loop.py:294`）。代价是历史里会留下一条**没有回答的用户消息**——
+（`src/myagent/agent/loop.py:333`）。代价是历史里会留下一条**没有回答的用户消息**——
 下一轮请求因此可能出现连续两条 user 消息（OpenAI 兼容端点接受），换来的是「用户说过什么」
 不会因为一次网络抖动而丢失。Phase 9 若要做重试/补偿，应该在这一层加。
 
@@ -460,64 +469,71 @@ class AgentLoop:
 
 | 失败 | `TurnContext.error` | 是否落盘 | 出口文案 |
 | --- | --- | --- | --- |
-| 请求没发出去（超预算） | 有 | **不落盘**（请求从未发出） | `The request was not sent: ...`（`src/myagent/agent/loop.py:257`） |
-| 请求发出但模型失败 | 无（走 runner 的 `stop_reason=error`） | 落盘（用户消息 + 无回答） | `The model call failed: ...`（`src/myagent/agent/loop.py:294`） |
+| 请求没发出去（超预算） | 有 | **不落盘**（请求从未发出） | `The request was not sent: ...`（`src/myagent/agent/loop.py:296`） |
+| 请求发出但模型失败 | 无（走 runner 的 `stop_reason=error`） | 落盘（用户消息 + 无回答） | `The model call failed: ...`（`src/myagent/agent/loop.py:333`） |
 
 ### 3.8 agent/context.py：从「拼字符串」到「可裁剪的 section」
 
 Phase 2 的 `ContextBuilder` 用字符串拼接组装一次请求；Phase 3 换成 PLAN 3.3 的 section 模型：
-请求的每一部分都是一个 `ContextSection`，自带 `priority` / `required` / `budget_tokens`，
-这样 Phase 6 可以按优先级裁剪并汇报「裁掉了什么」，而不是把决定藏进 f-string。
+请求的每一部分都是一个 `ContextSection`，自带 `priority` / `required` / `budget_tokens`；
+**Phase 6 把这个模型真的用起来**——按配额裁剪、按优先级降级、修结构、报告，
+并配一个 `ContextBudget`（公式与配额）与一份 `ContextReport`（每次 build 的账）。
 
 ```python
 @dataclass(frozen=True, slots=True)
-class ContextSection:      # src/myagent/agent/context.py:114
-    name: str                     # system / conversation / memory / rag / tools
+class ContextSection:      # src/myagent/agent/context.py:223
+    name: str                     # system / query / conversation / summary / memory / rag / tools
     priority: int                 # 越小越先保留（PLAN 6.1）
-    required: bool                # 不可裁剪
+    required: bool                # 不可裁剪（只有 system / query）
     content: str | list[Message]
     budget_tokens: int | None = None
-    def estimated_tokens(self) -> int: ...        # :98
+    def estimated_tokens(self) -> int: ...        # :232
 
 @dataclass(frozen=True, slots=True)
-class ContextRequest:      # src/myagent/agent/context.py:131
+class ContextRequest:      # src/myagent/agent/context.py:240
     user_input: str
     history: Sequence[Message] = ()
     memories: Sequence[ContextItem] = ()          # Phase 4 起由 MemoryManager.recall 填
     rag_chunks: Sequence[ContextItem] = ()        # Phase 5 填
     tools: Sequence[Mapping[str, Any]] = ()
     session_key: str = ""
-    budget_tokens: int | None = None
+    budget_tokens: int | None = None              # 覆盖运行时的 input_budget
+    summary: str = ""                             # Phase 6：压缩检查点（PLAN 6.0/6.4）
 
 @dataclass(frozen=True, slots=True)
-class ContextBundle:       # src/myagent/agent/context.py:149
+class ContextBundle:       # src/myagent/agent/context.py:312
     messages: list[Message]
-    transcript_start: int                 # 本轮新增消息的起点
+    transcript_start: int                 # 本轮新增消息的起点（:322）
     sections: tuple[ContextSection, ...] = ()
-    estimated_tokens: int = 0
+    report: ContextReport | None = None
 ```
 
 | 行为 | 位置 | 说明 |
 | --- | --- | --- |
-| 优先级常量 | `src/myagent/agent/context.py:56` | system 0 / conversation 2 / memory 4 / rag 5 / tools 6（PLAN 6.1 的表） |
-| section 组装 | `src/myagent/agent/context.py:229` | system 恒在；memory / rag / tools 为空时**不占位** |
-| 字符串 section 合并成一条 system | `src/myagent/agent/context.py:266` | 与上游把记忆与检索结果拼进 system 的做法一致（`docs/memory.md` §4） |
-| 超预算报错 | `src/myagent/agent/context.py:271` | `ContextBudgetExceeded(estimated, budget)`（`:173`）——V1 **只报不裁**，裁剪是 Phase 6 |
-| 压缩 | `src/myagent/agent/context.py:281` | `compact()` 返回空 `CompactionReport`（`:165`），Phase 6 填实现 |
+| 优先级 | `src/myagent/agent/context.py:98` | 一张 `_PRIORITY_OF` 表：system 0 / query 1 / conversation 2 / summary 3 / memory 4 / rag 5 / tools 6；required 只有 system / query（`:107`） |
+| 预算 | `src/myagent/agent/context.py:348` | `ContextBudget`：`quota()`（`:380`）、`with_input_tokens()`（`:386`）、`__post_init__` 校验（`:368`） |
+| section 组装 | `src/myagent/agent/context.py:546` | system 恒在；summary / memory / rag / tools 为空时**不占位** |
+| 四步拟合 | `src/myagent/agent/context.py:497` | `build()` 里顺序固定：`_clip_to_quotas`（`:627`）+ `_fit`（`:696`）→ `_drop_orphan_tool_results`（`:890`）/ `_backfill_missing_tool_results`（`:911`）→ 校验（`_measure`，`:612`） |
+| 字符串 section 合并成一条 system | `src/myagent/agent/context.py:597` | 消息段（conversation / query）按序展开，query 恒在最后；与上游把记忆与检索结果拼进 system 的做法一致（`docs/memory.md` §4） |
+| 报告 | `src/myagent/agent/context.py:288` | 每段的 `budget / used / dropped / action` + `summary_line()`（`:301`） |
+| 装不下就报错 | `src/myagent/agent/context.py:137` | `ContextWindowExceeded(estimated, budget)`（`:151`）继承 Phase 2 的 `models.base.ContextWindowExceeded`——**只裁到 required 为止，再装不下才报** |
+| 自动压缩 | `src/myagent/agent/context.py:523` | `compact()` 丢最旧整轮（不调模型），返回 `CompactionReport`（`:330`） |
+| 显式压缩 | `src/myagent/agent/compaction.py:129` | `compact_session` + `ModelSummarizer`（`:93`）把旧轮换成一个检查点 |
 
-检索结果通过 `ContextItem(text, reference, score)`（`src/myagent/agent/context.py:75`）
+检索结果通过 `ContextItem(text, reference, score)`（`src/myagent/agent/context.py:161`）
 进入 context：memory / rag 只交「文本 + 出处」，不交自己的记录类型。
 原因是 `agent` 不能依赖 `memory` / `rag`（§1 的第 1 条约束），
-而且 Phase 4/5 改内部表示时不必动这个契约。
-
+而且 Phase 4/5 改内部表示时不必动这个契约。设计细节与实验见
+[`docs/context-design.md`](./context-design.md) 与
+[`docs/records/phase-6-context.md`](./records/phase-6-context.md)。
 ### 3.9 session/：契约与实现分家
 
 Phase 2 把 `Session` 与 JSONL 实现放在一个模块；Phase 3 拆成两半：
 
-- **契约** `src/myagent/session/base.py:44` 的 `SessionStore`（`get_or_create` / `append` /
-  `clear` / `known_keys`）+ `Session`（`src/myagent/session/base.py:30`，
+- **契约** `src/myagent/session/base.py:51` 的 `SessionStore`（`get_or_create` / `append` /
+  `clear` / `known_keys`）+ `Session`（`src/myagent/session/base.py:36`，
   `transcript()` 从 `last_archived` 开始返回，`:38`）；
-- **实现** `JsonlSessionStore`（`src/myagent/session/manager.py:41`）。
+- **实现** `JsonlSessionStore`（`src/myagent/session/manager.py:54`）。
 
 ```text
 data/sessions/cli%3Adefault.jsonl
@@ -528,12 +544,12 @@ data/sessions/cli%3Adefault.jsonl
 ```
 
 - 一个 session 一个文件，文件名是 `quote(key, safe="")`
-  （`src/myagent/session/manager.py:58`），`cli:default` → `cli%3Adefault.jsonl`，
+  （`src/myagent/session/manager.py:71`），`cli:default` → `cli%3Adefault.jsonl`，
   因此 `a/b` 与 `a-b` 不会撞车。
 - **只追加**，不重写：崩溃最多丢掉尾部几条，不会破坏已有历史（上游 `session/manager.py:548`
-  的 `JsonlSessionStore` 同样以追加为主；实现见 `src/myagent/session/manager.py:115`）。
+  的 `JsonlSessionStore` 同样以追加为主；实现见 `src/myagent/session/manager.py:142`）。
 - `last_archived` 是**为 Phase 4/6 预留**的边界字段：压缩时前移即可，不删消息。
-- 坏行不致命：无法解析的行打 warning 后跳过（`src/myagent/session/manager.py:93`）。
+- 坏行不致命：无法解析的行打 warning 后跳过（`src/myagent/session/manager.py:119`）。
 - 把 JSONL 换成 SQLite 只需要新的 `SessionStore` 实现 + 改 `build_agent` 的默认值。
 
 ### 3.10 memory/：从「接口先立住」到 Phase 4 的分层实现
@@ -560,7 +576,7 @@ MemoryManager        # src/myagent/memory/manager.py:58   门面：write / recal
    字段也换了：`tags` 变成 `importance` / `metadata` / `consolidated_at`（PLAN 4.1 的表）；
 2. `BaseMemory` 从 4 个方法长到 8 个（见 §3.2），因为 `memory_vectors` 需要
    `get` / `count` / `forget` 才能维护「记录与向量」的一致性；
-3. Loop 通过 **`MemoryProvider`**（`src/myagent/agent/context.py:90`）消费记忆：
+3. Loop 通过 **`MemoryProvider`**（`src/myagent/agent/context.py:180`）消费记忆：
    `ContextRequest.memories`（`:131`）由 `MemoryManager.recall()` 填充，
    写完一轮再调 `observe()`——`agent` 侧始终不 import `myagent.memory`。
 
@@ -573,7 +589,7 @@ Phase 3 只立了三个契约（`BaseEmbedder` / `BaseVectorStore` / `BaseRetrie
 **Phase 5 把它实现成一条能跑的流水线**，并补上三个新契约：
 
 ```text
-RagPipeline            # src/myagent/rag/pipeline.py:101  ingest / retrieve / build_context / documents / delete
+RagPipeline            # src/myagent/rag/pipeline.py:130  ingest / retrieve / build_context / documents / delete
 ├─ BaseLoader          # src/myagent/rag/loader.py:71   Text / Markdown / Pdf（pypdf）
 ├─ BaseChunker         # src/myagent/rag/chunker.py:46  FixedSizeChunker(800, 120)
 ├─ BaseEmbedder        # src/myagent/rag/embedder.py:74 OpenAICompat+DashScope / OpenAI（批量 16、重试 3）
@@ -581,7 +597,7 @@ RagPipeline            # src/myagent/rag/pipeline.py:101  ingest / retrieve / bu
 ├─ BaseRetriever       # src/myagent/rag/retriever.py:43 VectorRetriever（命中回 SQLite 解析）
 ├─ BaseReranker        # src/myagent/rag/reranker.py:29  Identity / Score（默认 Identity）
 ├─ SQLiteDocumentStore # src/myagent/rag/store.py:85    documents + chunks（sha256 UNIQUE）
-└─ RagSettings         # src/myagent/config/settings.py:354 chunk_size / chunk_overlap / top_k
+└─ RagSettings         # src/myagent/config/settings.py:356 chunk_size / chunk_overlap / top_k
 ```
 
 三件与 Phase 3 不同的事：
@@ -593,32 +609,32 @@ RagPipeline            # src/myagent/rag/pipeline.py:101  ingest / retrieve / bu
    契约文件不 import `qdrant_client`，「核心不 import SDK」的约束（§1）才守得住；
 3. `RetrievedChunk.score` 与 `chunk.id` 留在契约里的原因不变：Phase 8 用这两个字段算 `hit@k`。
 
-装配与 CLI 在 `build_rag`（`src/myagent/runtime.py:117`）与
-`myagent ingest|search|docs`（`src/myagent/cli.py:120`）。
+装配与 CLI 在 `build_rag`（`src/myagent/runtime.py:151`）与
+`myagent ingest|search|docs`（`src/myagent/cli.py:158`）。
 细节见 [`docs/rag-design.md`](./rag-design.md)，实验与默认值的由来见 ADR-0009。
 
 ### 3.12 config 与 CLI
 
-- **`Settings`（`src/myagent/config/settings.py:593`）是配置的唯一样本**：
+- **`Settings`（`src/myagent/config/settings.py:603`）是配置的唯一样本**：
   `llm`（`LLMSettings`，:463）/ `agent`（`AgentSettings`，:544）/ `sqlite`（:142）/
   `qdrant`（:156）/ `embedding`（:213）/ `rag`（`RagSettings`，:354），
   `Settings.from_env()`（:611）一次读完 `.env`。
 - 组件**只接收 settings 对象，不读环境变量**：`OpenAICompatModel(settings.llm)`、
   `JsonlSessionStore.from_settings(settings.agent)`、
   `build_default_registry(settings.agent)`、`AgentRuntimeConfig.from_settings(agent, llm)`。
-- `LLMSettings.from_env()` 只校验形状，**不要求** model/key 存在（`src/myagent/config/settings.py:500`）；
-  `require_model()` / `require_api_key()`（`src/myagent/config/settings.py:526`、`:532`）在真正要发请求时才失败——
+- `LLMSettings.from_env()` 只校验形状，**不要求** model/key 存在（`src/myagent/config/settings.py:510`）；
+  `require_model()` / `require_api_key()`（`src/myagent/config/settings.py:536`、`:532`）在真正要发请求时才失败——
   这样 `myagent tools` 这类离线命令照常可用。
 - `myagent chat -m "..."` / `myagent chat`（交互：`/exit`、`/session`、`/clear`）/
-  `myagent tools`（`src/myagent/cli.py:337`），`myagent tools` 只读 `AgentSettings`
-  并打印注册表内容（`src/myagent/cli.py:339`）。
-- **CLI 不再装配**：`src/myagent/cli.py:358`、`:339` 都只调用 `build_agent()`。
+  `myagent tools`（`src/myagent/cli.py:429`），`myagent tools` 只读 `AgentSettings`
+  并打印注册表内容（`src/myagent/cli.py:431`）。
+- **CLI 不再装配**：`src/myagent/cli.py:450`、`:339` 都只调用 `build_agent()`。
   Phase 2 的「装配与命令行混在一个文件里」这个已知妥协到此结束。
 
 ### 3.13 装配：`build_agent` 是唯一的注入点（PLAN 3.5）
 
 ```python
-# src/myagent/runtime.py:41
+# src/myagent/runtime.py:47
 def build_agent(
     settings: Settings | None = None,
     *,
@@ -634,11 +650,11 @@ def build_agent(
 ```text
 Settings（.env → Settings.from_env()）
    │
-   ├── LLMSettings        → OpenAICompatModel           src/myagent/runtime.py:53
-   ├── AgentSettings      → build_default_registry      （→ ToolRegistry）      :54
-   │                      → SectionedContextManager                            :57
-   │                      → JsonlSessionStore.from_settings                    :60
-   │                      → AgentRuntimeConfig.from_settings                   :63
+   ├── LLMSettings        → OpenAICompatModel           src/myagent/runtime.py:79
+   ├── AgentSettings      → build_default_registry      （→ ToolRegistry）      :90
+   │                      → SectionedContextManager                            :93
+   │                      → JsonlSessionStore.from_settings                    :81
+   │                      → AgentRuntimeConfig.from_settings                   :86
    ├── SQLiteSettings     →（Phase 4）MemoryStore
    ├── QdrantSettings     →（Phase 5）QdrantVectorStore
    └── EmbeddingSettings  →（Phase 5）DashScopeEmbedder
@@ -650,18 +666,18 @@ Settings（.env → Settings.from_env()）
 两条规则：
 
 1. **默认值只从 `settings` 来**，`settings=None` 时才调用 `Settings.from_env()`
-   （`src/myagent/runtime.py:62`）——所以「换模型只改 `.env`」不是口号，
-   `tests/test_contracts.py:387` 用两份 `Settings` 装出两个模型、断言其余组件类型不变。
-2. **每个 kwarg 覆盖一个组件**，这是测试注入假件的方式（`tests/test_contracts.py:363`），
+   （`src/myagent/runtime.py:78`）——所以「换模型只改 `.env`」不是口号，
+   `tests/test_contracts.py:436` 用两份 `Settings` 装出两个模型、断言其余组件类型不变。
+2. **每个 kwarg 覆盖一个组件**，这是测试注入假件的方式（`tests/test_contracts.py:409`），
    也是 Phase 4/5/6 接新实现的方式：改默认值的人只有这一个函数。
 
-`AgentRuntimeConfig`（`src/myagent/agent/runtime.py:33`）把「一轮怎么跑」从配置加载里分出来：
+`AgentRuntimeConfig`（`src/myagent/agent/runtime.py:34`）把「一轮怎么跑」从配置加载里分出来：
 `max_iterations` / `tool_timeout_s` / `max_tool_result_chars` /
 `context_budget_tokens`（`from_settings`，:56）。
 预算公式是 PLAN 6.2 的 `context_window - max_tokens - 1024`
-（`src/myagent/agent/runtime.py:73`，`_SAFETY_MARGIN_TOKENS` 在 :29）；
+（`src/myagent/agent/runtime.py:84`，`_SAFETY_MARGIN_TOKENS` 在 :29）；
 窗口太小以至算不出正数时返回 `None`，表示「本阶段不做预算检查」
-（`tests/test_runtime.py:87`）。
+（`tests/test_runtime.py:88`）。
 上游把这类上限放在配置层（`config/schema.py:129` 的 `max_tool_iterations`、
 `max_tool_result_chars`），我们多走一步：配置层给默认值，运行期用一个小值对象传进 Loop。
 
@@ -671,22 +687,24 @@ Settings（.env → Settings.from_env()）
 
 | 机制 | 上游 | myagent | 为什么保留 |
 | --- | --- | --- | --- |
-| Loop / Runner 分离 | `agent/loop.py:196` / `agent/runner.py:89` | `src/myagent/agent/loop.py:119` / `src/myagent/agent/runner.py:87` | 职责边界清晰，Runner 可单独测试 |
-| 阶段化流水线 + 计时 | `agent/loop.py:1689` | `src/myagent/agent/loop.py:272` | 定位慢/坏的一轮不需要调试器 |
-| 会话内串行、跨会话并发 | `agent/loop.py:1391` | `src/myagent/agent/loop.py:158`、`:247` | 正确性前提，成本几乎为零 |
+| Loop / Runner 分离 | `agent/loop.py:196` / `agent/runner.py:89` | `src/myagent/agent/loop.py:120` / `src/myagent/agent/runner.py:87` | 职责边界清晰，Runner 可单独测试 |
+| 阶段化流水线 + 计时 | `agent/loop.py:1689` | `src/myagent/agent/loop.py:311` | 定位慢/坏的一轮不需要调试器 |
+| 会话内串行、跨会话并发 | `agent/loop.py:1391` | `src/myagent/agent/loop.py:178`、`:320` | 正确性前提，成本几乎为零 |
 | 工具结果「错误即观察」 | `agent/tools/execution.py:_with_retry_hint` | `src/myagent/tools/registry.py:153` | 模型能自我纠偏，一轮不会因工具失败而中断 |
 | 只读工具并发分批 | `agent/tools/execution.py:292` | `src/myagent/agent/runner.py:220` | 实现便宜、收益明确（一次 3 个只读调用只花 1 个 RTT 批次） |
 | 工具定义按名排序 | `agent/tools/registry.py:86` | `src/myagent/tools/registry.py:56` | prompt 缓存友好 |
-| 会话 JSONL 追加式 | `session/manager.py:548` | `src/myagent/session/manager.py:115` | 崩溃不破坏历史 |
+| 会话 JSONL 追加式 | `session/manager.py:548` | `src/myagent/session/manager.py:142` | 崩溃不破坏历史 |
 | schema 驱动的类型纠正 | `agent/tools/base.py:251` | `src/myagent/tools/base.py:231` | 模型给的 `"3"` 不该导致校验失败 |
-| 上下文分层（system / 记忆 / 检索） | `agent/context.py:89` | `src/myagent/agent/context.py:229` | 决定「模型看到什么」的顺序不能随手改 |
+| 上下文分层（system / 记忆 / 检索） | `agent/context.py:89` | `src/myagent/agent/context.py:546` | 决定「模型看到什么」的顺序不能随手改 |
+| 四步拟合预算（裁剪 → 修结构 → 校验） | `agent/context_governance.py:336` | `src/myagent/agent/context.py:497` | 顺序不能反：裁剪本身会制造结构错误 |
+| 摘要检查点（只推游标、不删原文） | `session/manager.py:323` | `src/myagent/session/manager.py:92`、`src/myagent/agent/compaction.py:129` | 有损层不该升级成唯一记录 |
 
 ### 4.2 简化
 
 | 上游机制 | V1/V2 做法 | 理由 / 后续 |
 | --- | --- | --- |
 | 7 阶段（含 `restore`/`compact`/`command`） | 4 阶段，命令在 CLI | 崩溃恢复与压缩是 Phase 4/9；CLI 命令只需一个 `if` |
-| `TurnContext` 20+ 字段 | 7 个字段（`src/myagent/agent/loop.py:89`） | 只保留本阶段真的会用的；`require_*()` 保证阶段顺序错误立刻暴露 |
+| `TurnContext` 20+ 字段 | 7 个字段（`src/myagent/agent/loop.py:90`） | 只保留本阶段真的会用的；`require_*()` 保证阶段顺序错误立刻暴露 |
 | `LLMProvider` 广接口（状态/遥测/重试策略） | `BaseModel` 三个方法 | Phase 6 需要预算时才扩 |
 | 工具自动发现 / 插件 / MCP | 显式注册 4 个工具 | PLAN 2.3 明确本阶段不做自动发现 |
 | `Schema` 抽象基类 + 装饰器 | `BaseTool` Protocol + 可选 `Tool` ABC | 4 个工具不值得类改写（`agent/tools/base.py:318` 的 `tool_parameters`） |
@@ -703,44 +721,43 @@ Settings（.env → Settings.from_env()）
 | `ToolCallRequest.parse_error` | `src/myagent/agent/types.py:41` | 「参数解析失败要能被上层看见」（PLAN 2.2）需要一个载体 |
 | `stop_reason` 用 `StopReason` 枚举 | `src/myagent/agent/types.py:90` | 是 `str` 子类，不违反 PLAN 的 `str` 约定，但可被类型检查 |
 | `AgentHook` 协议 | `src/myagent/agent/runner.py:40` | 给 Phase 3 的流式/进度留口，V1 只有测试与 CLI 用 |
-| `MessageBus` 放在 `loop.py` | `src/myagent/agent/loop.py:54` | PLAN 2.1 的文件清单没有 `bus.py`，V1 只有 30 行，Phase 3 再拆 |
+| `MessageBus` 放在 `loop.py` | `src/myagent/agent/loop.py:55` | PLAN 2.1 的文件清单没有 `bus.py`，V1 只有 30 行，Phase 3 再拆 |
 | `tokens.py::estimate_tokens` | `src/myagent/tokens.py:37` | PLAN 3.3 要「token 估算」，Phase 5 的 chunk 元数据与 Phase 6 的预算需要同一把尺子 |
 
 ### 4.4 Phase 3 相对 Phase 2 的变化
 
 | Phase 2 的状态 | Phase 3 的做法 | 证据 |
 | --- | --- | --- |
-| 注入具体类（`OpenAICompatModel` / `ContextBuilder` / `SessionManager`） | 注入契约（`BaseModel` / `ContextManager` / `SessionStore`） | `src/myagent/agent/loop.py:122` |
-| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:41`、`src/myagent/cli.py:358` |
-| `ContextBuilder` 拼字符串，无预算 | `SectionedContextManager`：section + 优先级 + token 估算 + 超预算报错 | `src/myagent/agent/context.py:114`、`:271` |
+| 注入具体类（`OpenAICompatModel` / `ContextBuilder` / `SessionManager`） | 注入契约（`BaseModel` / `ContextManager` / `SessionStore`） | `src/myagent/agent/loop.py:123` |
+| 装配在 `cli.build_agent_loop()` | 装配在 `runtime.build_agent()`，CLI 只调用 | `src/myagent/runtime.py:47`、`src/myagent/cli.py:450` |
+| `ContextBuilder` 拼字符串，无预算 | `SectionedContextManager`：section + 优先级 + token 估算 + 超预算报错 | `src/myagent/agent/context.py:223`、`:271` |
 | `memory/` 用 `add(content)` / `search(query, limit=)` | `add(record)` / `search(query, kind=, top_k=)` | `src/myagent/memory/base.py:30`、`:53` |
 | `Tool(ABC)` 是唯一契约 | `BaseTool` Protocol 是契约，`Tool(ABC)` 降为便利实现 | `src/myagent/tools/base.py:152`、`:187` |
-| Loop 与 Context 的依赖在运行时无校验 | AST 检查核心模块的 import 边界 | `tests/test_contracts.py:435` |
+| Loop 与 Context 的依赖在运行时无校验 | AST 检查核心模块的 import 边界 | `tests/test_contracts.py:484` |
 
-## 5. 尚未实现（Phase 5+ 的输入）
+## 5. 尚未实现（Phase 6+ 的输入）
 
-Phase 4 的分层记忆已不在这里：它变成「已实现」，设计见
-[`docs/memory-design.md`](./memory-design.md)，实验与质量门见
-[`docs/records/phase-4-memory.md`](./records/phase-4-memory.md)；下表只列还没做的部分
-（含 Phase 4 有意留白的项）。
+Phase 4 的分层记忆与 Phase 6 的上下文预算都已不在这里：它们变成「已实现」，设计见
+[`docs/memory-design.md`](./memory-design.md) / [`docs/context-design.md`](./context-design.md)，
+实验与质量门见 [`docs/records/phase-4-memory.md`](./records/phase-4-memory.md) /
+[`docs/records/phase-6-context.md`](./records/phase-6-context.md)；下表只列还没做的部分
+（含前面阶段有意留白的项）。
 
 | 未做 | 谁来做 | 现状 |
 | --- | --- | --- |
-| 长度续写、上下文预算裁剪、`count_tokens` 真实值 | Phase 6 | `count_tokens()` 返回 `None`（`src/myagent/models/openai_compat.py:119`）；`compact()` 是空实现（`src/myagent/agent/context.py:281`） |
-| 超预算时的优先级裁剪（现在只报错） | Phase 6 | `ContextBudgetExceeded`（`src/myagent/agent/context.py:173`）会在 Phase 6 退化成「连必留 section 都放不下」时的兜底 |
-| 结构修复（tool 消息顺序、孤儿 tool_call） | Phase 6 | 没有实现 |
-| `last_archived` 前移与摘要检查点 | Phase 6 | 字段已落盘、语义已实现（`src/myagent/session/base.py:38`），没人前移它（Phase 4 的巩固游标是 `memories.consolidated_at`，两回事） |
+| `count_tokens` 的真实值 | 提供方实现后自动接管 | 契约已留口（`src/myagent/models/base.py:97`），V1 仍返回 `None`；上下文用 `tokens.py` 的 4 字符≈1 token 估算（`src/myagent/agent/token_budget.py:39`） |
+| 长度续写（`stream()` / 流式 CLI） | Phase 6+ | 契约里有，实现抛 `NotImplementedError`；CLI 不流式 |
 | 记忆的定时巩固 / 后台任务 | 按需 | 只有显式命令 `myagent memory consolidate`（PLAN 4.8 的选择） |
+| 空闲压缩（autocompact 定时器） | 按需 | PLAN 6.4 写「默认关闭」；压缩只由 `session compact` 或配额触发（`docs/context-design.md` §9） |
 | 混合检索（BM25 / RRF）与查询改写 | Phase 5+ | 记忆侧向量优先、短 query 与降级走关键词（`docs/memory-design.md` §9）；RAG 侧只有 `VectorRetriever` 与一个离线子串对照（`src/myagent/rag/retriever.py:100`） |
 | 模型型 reranker（cross-encoder / 托管 rerank） | Phase 8 判定 | 只有 `IdentityReranker` / `ScoreReranker`；ADR-0009 的引入条件是 `hit@3` 的提升大于延迟增量 |
-| 把 RAG 接进 Agent 上下文（`MYAGENT_RAG_ENABLED`、预算配额） | Phase 6 | `RagPipeline.build_context()` 已就位（`src/myagent/rag/pipeline.py:219`），但没有 section 消费它 |
+| 四来源配额（35/35/20/10）的调优 | Phase 8 | 当前值是 ADR-0010 记录的起点，用更大的标注集复算（`src/myagent/agent/context.py:111`） |
+| 摘要的二次校验（与原文对照 / 模型自评） | Phase 8 | 现在只校验「非空」（`src/myagent/agent/compaction.py:125`） |
 | 按 URL 摄取、增量更新（改一个字就重建） | 按需 | `BaseLoader` 接的是本地路径；内容寻址的代价是「改一个字 = 新文档」（`docs/rag-design.md` §12） |
 | `myagent config check` 启动自检 | Phase 9 | PLAN 5.4 的验收里提到它，但它是 §9.2 的产物；Phase 5 用 `ingest` 的输出行与 `docs list` 验收（`docs/records/phase-5-rag.md` §7） |
 | 真实论文检索 | Phase 7 | `search_local` 是受控桩（`src/myagent/tools/builtin/search_local.py:60`） |
 | 崩溃恢复 / checkpoint | Phase 9 | 无 |
-| `stream()` 与流式 CLI | Phase 6+ | 契约里有，实现抛 `NotImplementedError`；CLI 不流式 |
-| 多会话管理（列表/切换） | Phase 3 之后按需 | `SessionStore.known_keys()`（`src/myagent/session/base.py:59`）已就位，CLI 只用默认会话 |
-
+| 多会话管理（列表/切换） | Phase 3 之后按需 | `SessionStore.known_keys()`（`src/myagent/session/base.py:66`）已就位，CLI 只用默认会话 |
 ## 6. 答辩：四个设计问题
 
 ### 6.1 为什么 AgentLoop 不应该直接负责 RAG？
@@ -753,18 +770,18 @@ Phase 4 的分层记忆已不在这里：它变成「已实现」，设计见
    `BaseRetriever` / `BaseMemory` 的实现（`src/myagent/rag/retriever.py:43`、
    `src/myagent/memory/base.py:30`），`ContextManager` 只消费检索结果；
 2. **检索结果怎么进 prompt**（section 顺序、配额、超预算时先丢谁）是上下文策略，
-   PLAN 6.1 给了优先级表，代码在 `src/myagent/agent/context.py:56`；
+   PLAN 6.1 给了优先级表，代码在 `src/myagent/agent/context.py:98`；
 3. **一次请求要不要检索**（有没有文档可查、是否是闲聊）是编排决策，这才是 Loop 的份内事。
 
 如果把 1/2 写进 Loop，会同时产生三个坏结果：Loop 必须 import 向量库客户端（破坏 §1 的
 「核心不 import SDK」）、换 embedding 或换向量库要改 Loop（Phase 5 的全部工作）、
 以及检索策略无法单独测试（今天 `ContextManager` 可以用 `CountingContextManager`
-在不起网络的前提下被断言，`tests/test_contracts.py:220`）。
+在不起网络的前提下被断言，`tests/test_contracts.py:286`）。
 
 上游的教训正好是「Loop 什么都管」的代价：它同时承担频道投递、cron、子 agent、崩溃恢复
 （`agent/loop.py:1594`），于是 7 阶段流水线里没有任何一段能被单独替换。
-Loop 现在的边界由类型强制：构造函数只收契约（`src/myagent/agent/loop.py:122`），
-而「核心不 import 具体实现」由 `tests/test_contracts.py:442` 检查。
+Loop 现在的边界由类型强制：构造函数只收契约（`src/myagent/agent/loop.py:123`），
+而「核心不 import 具体实现」由 `tests/test_contracts.py:491` 检查。
 
 ### 6.2 为什么 Memory 和 RAG 要拆成独立模块，而不是合并成一个 Retrieval 模块？
 
@@ -784,7 +801,7 @@ Loop 现在的边界由类型强制：构造函数只收契约（`src/myagent/ag
 `agent/memory.py:253` 注入上下文），这正是我们要补的洞。
 
 对 Loop 来说两者却是同构的：都产出「文本 + 出处」，都通过同一个
-`ContextItem`（`src/myagent/agent/context.py:75`）进入 `ContextRequest.memories` /
+`ContextItem`（`src/myagent/agent/context.py:161`）进入 `ContextRequest.memories` /
 `.rag_chunks`。**接口相同、实现独立**，这才是拆分的价值。
 
 ### 6.3 为什么 Tool 需要 Registry，而不是一个 dict + 分支？
@@ -803,7 +820,7 @@ Loop 现在的边界由类型强制：构造函数只收契约（`src/myagent/ag
 再加两点工程理由：**顺序稳定**（`get_definitions` 按名字排序，`src/myagent/tools/registry.py:56`，
 对 prompt 缓存友好）和**唯一入口**（`register`，`src/myagent/tools/registry.py:33`）——
 「新增一个工具只需 `registry.register(...)`」这条验收标准就是它的直接推论
-（`tests/test_contracts.py:322`）。
+（`tests/test_contracts.py:366`）。
 
 dict + 分支的写法会把上面五件事散到调用点，每加一个工具都要回到 runner 改 `if`，
 而且测试只能端到端测——上游的 `agent/tools/registry.py` 与
@@ -818,18 +835,18 @@ dict + 分支的写法会把上面五件事散到调用点，每加一个工具�
 
 1. **实现方不必继承，也不必 import 我们**：Phase 5 的 Qdrant 包装、Phase 4 的记忆后端
    可以是对上游 `Protocol`、甚至第三方库原生对象的一层薄壳；继承 ABC 则要求这些对象改成
-   我们的子类（`tests/test_contracts.py:266` 断言假件 `__mro__` 里只有 `object`）。
+   我们的子类（`tests/test_contracts.py:293` 断言假件 `__mro__` 里只有 `object`）。
 2. **依赖方向不会因为继承被重新绑上**：ABC 会把 `agent` 与 `models` 变成父子关系，
    而 `Protocol` 只描述形状，`agent` 依然只 import 契约文件（§1 的三条约束）。
-3. **替换实现零改动**：换模型只改 `.env`（`tests/test_contracts.py:387`）；
-   加工具只 `register`（`tests/test_contracts.py:322`）。
+3. **替换实现零改动**：换模型只改 `.env`（`tests/test_contracts.py:436`）；
+   加工具只 `register`（`tests/test_contracts.py:366`）。
 4. **`isinstance` 分支被明确排除**：核心代码里一旦出现 `if isinstance(x, QdrantVectorStore)`，
    每加一个实现就要改核心，且核心必须 import 那个实现——正是 Phase 3 要拆掉的耦合。
 
 代价也要说清楚（写在 ADR-0007 的「后果」里）：`runtime_checkable` 的 `isinstance`
 **只检查成员是否存在，不检查签名**。所以 `ScriptedModel` 只有 `generate`，就**不**满足
-`BaseModel`（`tests/test_contracts.py:274` 有意断言这一点）；带数据成员的 Protocol 上
-`issubclass` 会抛 `TypeError`（`tests/test_contracts.py:266`）。
+`BaseModel`（`tests/test_contracts.py:301` 有意断言这一点）；带数据成员的 Protocol 上
+`issubclass` 会抛 `TypeError`（`tests/test_contracts.py:293`）。
 结论是：契约的成员一旦变动，所有假件都会立刻失败——这是有意的摩擦，不是缺陷。
 
 ## 7. 速查索引
@@ -837,25 +854,28 @@ dict + 分支的写法会把上面五件事散到调用点，每加一个工具�
 | 主题 | 位置 |
 | --- | --- |
 | 模块职责与「不做什么」 | 本文 §3.1 |
-| 九个契约 + RAG 的三个新契约 | `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、`src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:74`、`src/myagent/rag/vectorstore.py:63`、`src/myagent/rag/retriever.py:43`、`src/myagent/agent/context.py:191`、`src/myagent/session/base.py:44`、`src/myagent/agent/context.py:90`；`src/myagent/rag/loader.py:71`、`src/myagent/rag/chunker.py:46`、`src/myagent/rag/reranker.py:29` |
-| 唯一装配点 | `src/myagent/runtime.py:41` |
-| 一轮的行为上限 | `src/myagent/agent/runtime.py:33` |
-| Loop 4 阶段 / 锁 / 失败语义 | `src/myagent/agent/loop.py:156`、`:247`、`:174` |
-| ContextManager / section / 预算 | `src/myagent/agent/context.py:191`、`:89`、`:246` |
+| 九个契约 + RAG 的三个新契约 | `src/myagent/models/base.py:71`、`src/myagent/tools/base.py:152`、`src/myagent/memory/base.py:30`、`src/myagent/rag/embedder.py:74`、`src/myagent/rag/vectorstore.py:63`、`src/myagent/rag/retriever.py:43`、`src/myagent/agent/context.py:401`、`src/myagent/session/base.py:51`、`src/myagent/agent/context.py:180`；`src/myagent/rag/loader.py:71`、`src/myagent/rag/chunker.py:46`、`src/myagent/rag/reranker.py:29` |
+| 唯一装配点 | `src/myagent/runtime.py:47` |
+| 一轮的行为上限 | `src/myagent/agent/runtime.py:34` |
+| Loop 4 阶段 / 锁 / 失败语义 | `src/myagent/agent/loop.py:176`、`:320`、`:201` |
+| ContextManager / section / 预算 / 报告 | `src/myagent/agent/context.py:401`、`:223`、`:348`、`:288` |
+| 上下文设计 / 决策 / 实验 | `docs/context-design.md`、`docs/decision-records/0010-context-budget.md`、`docs/records/phase-6-context.md` |
+| 压缩（显式 / 自动）/ 摘要生成 | `src/myagent/agent/compaction.py:129`、`src/myagent/agent/context.py:523`、`src/myagent/agent/compaction.py:93` |
 | Runner 主循环 / 收尾 / 截断 / 分批 | `src/myagent/agent/runner.py:90`、`:130`、`:213`、`:220` |
 | 工具注册表（准备/执行/定义） | `src/myagent/tools/registry.py:64`、`:106`、`:56` |
 | 内置工具注册 | `src/myagent/tools/builtin/__init__.py:30` |
-| 会话契约 / JSONL 实现 | `src/myagent/session/base.py:44`、`src/myagent/session/manager.py:41` |
-| 记忆契约 / 分层实现 / 装配 | `src/myagent/memory/base.py:30`、`src/myagent/memory/manager.py:58`、`src/myagent/runtime.py:87` |
+| 会话契约 / JSONL 实现 | `src/myagent/session/base.py:51`、`src/myagent/session/manager.py:54` |
+| 记忆契约 / 分层实现 / 装配 | `src/myagent/memory/base.py:30`、`src/myagent/memory/manager.py:58`、`src/myagent/runtime.py:121` |
 | 记忆检索（衰减 / 降级） | `src/myagent/memory/retriever.py:79`、`:126` |
 | 写入策略（拆句 / 清单 / 去重） | `src/myagent/memory/extractor.py:184`、`:200` |
 | 巩固（Episodic → Semantic） | `src/myagent/memory/consolidator.py:92` |
-| 记忆注入端口（Loop 侧） | `src/myagent/agent/context.py:90`、`src/myagent/agent/loop.py:224`、`:239` |
-| RAG CLI 入口 | `src/myagent/cli.py:120`、`:145`、`:157`、`:179`、`:199`、`:215` |
-| RAG 编排 / 契约 / 装配 | `src/myagent/rag/pipeline.py:101`、`src/myagent/rag/chunker.py:54`、`src/myagent/rag/vectorstore.py:85`、`src/myagent/runtime.py:117` |
-| 切分默认值与实验依据 | `src/myagent/config/settings.py:136`、`docs/decision-records/0009-chunking-and-retrieval.md` |
+| 记忆注入端口（Loop 侧） | `src/myagent/agent/context.py:180`、`src/myagent/agent/loop.py:247`、`:278` |
+| 文档注入端口（Loop 侧） | `src/myagent/agent/context.py:204`、`src/myagent/agent/loop.py:262` |
+| RAG CLI 入口 | `src/myagent/cli.py:158`（解析器）、`:183`（分发）、`:195`（ingest）、`:217`（search）、`:237`（docs list）、`:253`（docs delete） |
+| RAG 编排 / 契约 / 装配 | `src/myagent/rag/pipeline.py:130`、`src/myagent/rag/chunker.py:54`、`src/myagent/rag/vectorstore.py:85`、`src/myagent/runtime.py:151` |
+| 切分默认值与实验依据 | `src/myagent/config/settings.py:138`、`docs/decision-records/0009-chunking-and-retrieval.md` |
 | token 估算 | `src/myagent/tokens.py:37` |
-| 设置项 | `src/myagent/config/settings.py:463`（LLM）、`:544`（Agent）、`:593`（Settings 总入口）、`:280`（Memory）、`:354`（RAG） |
-| CLI 入口 | `src/myagent/cli.py:52` |
-| 契约与边界的测试 | `tests/test_contracts.py:252`、`:305`、`:363`、`:435` |
+| 设置项 | `src/myagent/config/settings.py:473`（LLM）、`:554`（Agent）、`:603`（Settings 总入口）、`:282`（Memory）、`:356`（RAG） |
+| CLI 入口 | `src/myagent/cli.py:59` |
+| 契约与边界的测试 | `tests/test_contracts.py:277`、`:293`、`:484`、`:491` |
 | 扩展点决策（ADR） | `docs/decision-records/0007-framework-extension-points.md` |

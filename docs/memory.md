@@ -286,9 +286,9 @@ ctx.history = session.get_history(extend_to_user=is_subagent)
 
 | 上游机制 | 实际做法 | 位置 |
 | --- | --- | --- |
-| Session / Memory 分离 | 保留：Session 仍是 JSONL，Memory 落 SQLite（同库不同表） | `src/myagent/session/manager.py:115`、`src/myagent/memory/sqlite_store.py:49` |
+| Session / Memory 分离 | 保留：Session 仍是 JSONL，Memory 落 SQLite（同库不同表） | `src/myagent/session/manager.py:142`、`src/myagent/memory/sqlite_store.py:49` |
 | `history.jsonl` + 自增 cursor | 保留会话侧；记忆侧换成 `memories.consolidated_at IS NULL` 当增量游标 | `src/myagent/memory/sqlite_store.py:199` |
-| 摘要检查点（`last_archived`） | **未在 Phase 4 使用**：记忆只读会话历史，不改会话；留给 Phase 6 的预算裁剪 | `src/myagent/session/base.py:38` |
+| 摘要检查点（`last_archived`） | **未在 Phase 4 使用**：记忆只读会话历史，不改会话；留给 Phase 6 的预算裁剪 | `src/myagent/session/base.py:45` |
 | `GitStore` 版本化记忆 | 不采用：记录进 SQLite，`source` / `metadata` / `consolidated_from` 提供可审计性 | `src/myagent/memory/types.py:42`、`src/myagent/memory/consolidator.py:166` |
 | Dream 定时改写 | 改为显式的 `Consolidator`（`myagent memory consolidate`），**只有成功才前移游标** | `src/myagent/memory/consolidator.py:92` |
 | 单一 `MEMORY.md` | 拆成 Working / Episodic / Semantic 三层 + Retriever | `src/myagent/memory/manager.py:58` |
@@ -307,6 +307,6 @@ ctx.history = session.get_history(extend_to_user=is_subagent)
 | `Consolidator` | `agent/memory.py:1072`、`1103`、`1222` |
 | Session 结构 | `session/manager.py:276` |
 | 重放与摘要边界 | `session/manager.py:344`、`323` |
-| 摘要元数据 | `session/summary.py:23`、`28` |
+| 摘要元数据 | `session/summary.py:24`、`30` |
 | 会话存储位置约束 | `session/manager.py:548`（必须位于 workspace 之外） |
 | 记忆进入上下文 | `agent/context.py:127`、`194`、`145` |

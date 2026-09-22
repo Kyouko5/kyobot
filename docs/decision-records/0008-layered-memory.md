@@ -3,7 +3,7 @@
 - 状态：已接受
 - 日期：2026-09-20
 - 关联：Phase 4（4.0 分层 / 4.5 存储 / 4.6 写入策略 / 4.8 巩固）；
-  实现入口 `src/myagent/memory/`、装配点 `src/myagent/runtime.py:87`；
+  实现入口 `src/myagent/memory/`、装配点 `src/myagent/runtime.py:121`；
   设计说明 [`docs/memory-design.md`](../memory-design.md)
 
 ## 背景
@@ -32,7 +32,7 @@ Phase 3 已经用 `Protocol` + 装配注入立好了 `BaseMemory` 契约。本 A
    所以陈旧向量不会漏进答案，向量库挂了记录也还在、还能按关键词搜。
 3. **记忆用独立 collection**：`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`，
    与文档向量的 `myagent_documents` 分开；`QdrantSettings` 在两者相等时直接抛
-   `ValueError`（`src/myagent/config/settings.py:180`）。
+   `ValueError`（`src/myagent/config/settings.py:182`）。
    理由：记忆按 id 逐条删除、文档整篇重灌，生命周期与清理粒度不同，混在一起会让
    「删掉一篇论文」的 `delete(document_id)` 有误伤记忆的可能。
 4. **LLM 提议，代码裁决**：抽取器（`src/myagent/memory/extractor.py:150`）同时跑规则兜底与
@@ -50,10 +50,10 @@ Phase 3 已经用 `Protocol` + 装配注入立好了 `BaseMemory` 契约。本 A
    （`src/myagent/memory/consolidator.py:119`），规则合并用「；」拼接同簇原文，不会丢信息。
 9. **失败降级，不抛异常**：检索把 Qdrant / embedding 的失败转成
    `MemoryContext(degraded=True, note=...)`（`src/myagent/memory/retriever.py:79`）；Loop 侧再把异常兜成
-   「这轮没有记忆」（`src/myagent/agent/loop.py:224`、`:239`）。记忆是增强项，不是依赖。
+   「这轮没有记忆」（`src/myagent/agent/loop.py:247`、`:239`）。记忆是增强项，不是依赖。
 10. **`agent` 不 import `myagent.memory`**：Loop 只认 `MemoryProvider`
-    （`src/myagent/agent/context.py:90`，`recall` + `observe` 两个方法），
-    `MemoryManager` 实现它；装配仍在 `myagent.runtime`（`build_memory`，`src/myagent/runtime.py:87`）。
+    （`src/myagent/agent/context.py:180`，`recall` + `observe` 两个方法），
+    `MemoryManager` 实现它；装配仍在 `myagent.runtime`（`build_memory`，`src/myagent/runtime.py:121`）。
 
 ## 理由
 

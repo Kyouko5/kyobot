@@ -33,14 +33,14 @@ SQLite + Qdrant。要回答的四个问题是：**什么该记住（4.6）、记
 | 四层：Working / Episodic / Semantic + Retriever | PLAN 4.0 | `src/myagent/memory/manager.py:58` |
 | Working 不落库，直接从会话历史构造 | PLAN 4.0 约束 1（不重复存原文） | `src/myagent/memory/working.py:34` |
 | 记录进 SQLite、向量进 Qdrant，`memory_id` 关联 | ADR-0003、PLAN 4.5 | `src/myagent/memory/sqlite_store.py:49`、`src/myagent/memory/vector_index.py:87` |
-| 记忆用独立 collection（`myagent_memories`） | ADR-0008：两类数据的删除粒度不同 | `src/myagent/config/settings.py:180` |
+| 记忆用独立 collection（`myagent_memories`） | ADR-0008：两类数据的删除粒度不同 | `src/myagent/config/settings.py:182` |
 | 写入 = 规则兜底 + LLM 抽取 → 策略 → 去重 | PLAN 4.6 | `src/myagent/memory/extractor.py:150`、`:184`、`:200` |
 | 上限（500 字符 / 3 条 / importance ≥ 0.5）在代码里强制 | PLAN 4.1「不靠 prompt 自觉」 | `src/myagent/memory/extractor.py:271`、`:293` |
 | Episodic 时间衰减、Semantic 不衰减 | PLAN 4.3 / 4.4 | `src/myagent/memory/retriever.py:125` |
 | 巩固「只有成功才前移游标」；模型不合并就用规则 | PLAN 4.8、上游 `agent/memory.py:619` | `src/myagent/memory/consolidator.py:92`、`:119` |
-| Loop 只认 `MemoryProvider`（不 import `myagent.memory`） | Phase 3 的依赖方向（ADR-0007） | `src/myagent/agent/context.py:90`、`src/myagent/agent/loop.py:224` |
+| Loop 只认 `MemoryProvider`（不 import `myagent.memory`） | Phase 3 的依赖方向（ADR-0007） | `src/myagent/agent/context.py:180`、`src/myagent/agent/loop.py:247` |
 | 失败降级：`degraded=True` + note，绝不抛出 | PLAN 验收「可读错误而不是堆栈」 | `src/myagent/memory/retriever.py:79` |
-| 装配单独提供 `build_memory()` | CLI 需要「只要记忆、不要 Loop」 | `src/myagent/runtime.py:87` |
+| 装配单独提供 `build_memory()` | CLI 需要「只要记忆、不要 Loop」 | `src/myagent/runtime.py:121` |
 
 ## 4. 实现
 
@@ -178,14 +178,14 @@ all anchors resolve
 
 | PLAN Phase 4 验收项 | 结果 |
 | --- | --- |
-| `myagent memory list` 能看到 Session 1 提炼出的 Semantic 记录 | ✅ §6.5、`tests/test_cli.py:224` |
+| `myagent memory list` 能看到 Session 1 提炼出的 Semantic 记录 | ✅ §6.5、`tests/test_cli.py:251` |
 | `MYAGENT_MEMORY_ENABLED=false` 后同一问题不再召回 | ✅ §6.5（OFF 行无召回）、`tests/test_memory.py:1254` |
 | 写入准确率：20 句人工标注，报准确率与误写率 | ✅ §6.1 |
 | 去重：同一事实重复 3 轮 | ✅ §6.2（规则 0 条；LLM 2 条，原因见 §8.1） |
 | 巩固：3 条 Episodic → 1 条 Semantic，检查信息是否丢失 | ✅ §6.3（覆盖率 100%） |
 | 检索：10 个记忆类问题，报 hit@5 与延迟 | ✅ §6.4（10/10、99 ms） |
 | `scripts/check.sh` 全绿；`tests/test_memory.py` 全部离线 | ✅ §7、`tests/test_memory.py:1` 的模块说明 |
-| Qdrant 未启动时给出可读错误而不是堆栈 | ✅ `tests/test_memory.py:500`、`tests/test_cli.py:251`；真实验证见 §8.2 |
+| Qdrant 未启动时给出可读错误而不是堆栈 | ✅ `tests/test_memory.py:500`、`tests/test_cli.py:278`；真实验证见 §8.2 |
 
 ## 8. 过程中发现并修掉的四个真实问题
 

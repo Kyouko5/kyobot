@@ -5,6 +5,10 @@
 > 核心文件：`agent/context.py`（组装）、
 > `agent/context_governance.py`（预算与压缩）、`agent/autocompact.py`（空闲压缩）、
 > `session/summary.py`（摘要检查点）。
+>
+> 本文只讲**上游**的机制。我们自己的实现（七段 section、优先级、四档预算、四步拟合与
+> 摘要检查点，Phase 6）见 [`docs/context-design.md`](./context-design.md)；
+> 预算与配额的决策依据见 [`docs/decision-records/0010-context-budget.md`](./decision-records/0010-context-budget.md)。
 
 ## 0. 心智模型
 

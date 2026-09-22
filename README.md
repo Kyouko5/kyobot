@@ -17,7 +17,7 @@
 | Phase 3 | Agent Framework 重构：模块职责与接口 | ✅ 已完成 |
 | Phase 4 | Memory 系统改造：Working / Episodic / Semantic + 检索 | ✅ 已完成 |
 | Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ✅ 已完成 |
-| Phase 6 | Context Manager 重构：优先级与预算 | ⬜ 未开始 |
+| Phase 6 | Context Manager 重构：优先级与预算 | ✅ 已完成 |
 | Phase 7 | 垂直领域 Agent | ⬜ 未开始 |
 | Phase 8 | Evaluation Pipeline | ⬜ 未开始 |
 | Phase 9 | 工程化：测试、Logging、Docker | ⬜ 未开始 |
@@ -50,6 +50,10 @@ myagent ingest docs/*.md                    # 摄取（幂等；首次自动探�
 myagent search "切分参数怎么定" -k 5         # 检索，输出 [文档id#块号] 引用
 myagent docs list                           # 知识库里有哪些文档
 myagent docs delete <document_id>           # 删一篇（向量 + 行一起删）
+
+# 6. 上下文预算与压缩（Phase 6）
+myagent chat --show-context -m "现在几点？"   # 打印七个 section 的 budget/used/dropped，再给答案
+myagent session compact cli:default          # 把旧轮换成一个摘要检查点（--keep-recent 控制保留几轮）
 ```
 
 Phase 3 之后的 Framework V2 可以独立运行，且**模块可替换、依赖可注入**：契约用 `Protocol`
@@ -73,6 +77,14 @@ Phase 5 的 **RAG 流水线**是一条独立于对话的命令行能力（上游
 `EMBED_DIM` 留空时首次 ingest 会用一次真实调用探测维度并写回 `.env`。
 细节见 [`docs/rag-design.md`](./docs/rag-design.md)
 与实验表 [`docs/records/phase-5-rag.md`](./docs/records/phase-5-rag.md)。
+
+Phase 6 的 **Context Manager** 把记忆与文档正式接进 prompt，并把「装不下怎么办」写成固定的
+四步：按 section 配额裁剪 → 删孤儿 tool 结果 → 补缺失的 tool 结果 → 校验（实在装不下才报错）。
+预算公式 `input_budget = context_window - max_output_tokens - 1024`，各来源配额 35/35/20/10
+（ADR-0010）；每次 build 产出一份 `ContextReport`，`myagent chat --show-context` 直接打印它。
+长会话用 `myagent session compact <key>` 压成一个摘要检查点，**原文仍留在 JSONL 里**。
+细节见 [`docs/context-design.md`](./docs/context-design.md)
+与实验表 [`docs/records/phase-6-context.md`](./docs/records/phase-6-context.md)。
 
 > 如果 `myagent` 报 `ModuleNotFoundError: No module named 'myagent'`：本机 `.venv` 里的 `.pth`
 > 被 macOS 打上了 `hidden` 标志，Python 的 `site` 会读不到它。执行 `chflags -R nohidden .venv`
@@ -100,7 +112,7 @@ kyobot/
 ├── pyproject.toml              # 打包、ruff、mypy、pytest、coverage 配置
 ├── src/myagent/                # Framework 本体
 │   ├── runtime.py              # build_agent() / build_memory()：唯一装配点
-│   ├── agent/                  # types / runner / loop（4 阶段）/ context（section + 预算）/ runtime（运行参数）
+│   ├── agent/                  # types / runner / loop（4 阶段）/ context（section + 预算）/ compaction（摘要检查点）/ token_budget（估算）/ runtime（运行参数）
 │   ├── models/                 # BaseModel 协议 + OpenAI 兼容实现
 │   ├── tools/                  # BaseTool 协议 / schema 校验 / Registry / builtin 四个工具
 │   ├── session/                # SessionStore 契约 + JSONL 实现（追加式 + last_archived）
@@ -110,7 +122,7 @@ kyobot/
 │   ├── observability/          # 日志等可观测性基础件
 │   ├── tokens.py               # 全框架共用的 token 估算
 │   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs（只调用 build_*）
-├── tests/                      # pytest 测试（591 项，覆盖率 100%；tests/rag/ 全部离线）
+├── tests/                      # pytest 测试（641 项，覆盖率 100%；tests/rag/ 全部离线）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
 │   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
@@ -121,10 +133,11 @@ kyobot/
 │   ├── memory.md               # Session vs Memory / 归档 / Dream
 │   ├── memory-design.md        # 分层记忆：分层表 / 存储 / 写入策略 / 检索 / 巩固（Phase 4）
 │   ├── rag-design.md           # RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 引用（Phase 5）
+│   ├── context-design.md       # 上下文：优先级 / 预算 / 四步拟合 / 压缩 / 答辩（Phase 6）
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
 │   └── records/                # 阶段工作记录
-├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py / rag_experiment.py
+├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py / rag_experiment.py / context_experiment.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 ├── data/                       # 本地运行状态：会话 JSONL + 记忆 SQLite（git 忽略）
 └── nanobot/                    # 上游只读参照，不参与构建（git ignored）
@@ -174,8 +187,15 @@ kyobot/
 - [`docs/records/phase-5-rag.md`](./docs/records/phase-5-rag.md)：Phase 5 工作记录（chunk size 实验、reranker 对比、RAG OFF/ON、真实服务冒烟与质量门）。
 - [`scripts/rag_experiment.py`](./scripts/rag_experiment.py)：跑出上面三张表的实验脚本（`--offline` 只跑关键词行）。
 
+**Context（Phase 6 产出）**
+
+- [`docs/context-design.md`](./docs/context-design.md)：七段结构、优先级表、四步拟合（裁剪 → 修结构 → 校验）、预算公式与四档配额、压缩的三条触发路径、与上游 `ContextBuilder` / `ContextGovernor` 的对照，以及「Context 太长怎么办」等三个答辩问题。
+- [`docs/decision-records/0010-context-budget.md`](./docs/decision-records/0010-context-budget.md)：为什么用 `context_window - max_output_tokens - 1024`、为什么四档是 35/35/20/10、`None` 为什么表示「不检查」、什么条件下该改这些数字。
+- [`docs/records/phase-6-context.md`](./docs/records/phase-6-context.md)：Phase 6 工作记录（预算裁剪表、压缩前后对比与探针、开关 ON/OFF、真实服务 transcript 与质量门）。
+- [`scripts/context_experiment.py`](./scripts/context_experiment.py)：跑出上面三张表的实验脚本（`--offline` 跳过需要模型的压缩段）。
+
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 957 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 1195 个锚点全部解析通过），避免文档与源码脱节。
 
 **工程与决策**
 

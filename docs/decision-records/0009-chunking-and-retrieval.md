@@ -4,7 +4,7 @@
 - 日期：2026-09-22
 - 关联：Phase 5.3（Chunker）/ 5.5（VectorStore）/ 5.7（Reranker）；
   实验数据 [`docs/records/phase-5-rag.md`](../records/phase-5-rag.md) §6；
-  实现入口 `RagSettings`（`src/myagent/config/settings.py:354`）、
+  实现入口 `RagSettings`（`src/myagent/config/settings.py:356`）、
   `FixedSizeChunker`（`src/myagent/rag/chunker.py:54`）、
   `src/myagent/rag/reranker.py`（`src/myagent/rag/reranker.py:29`）；
   设计说明 [`docs/rag-design.md`](../rag-design.md)
@@ -27,9 +27,9 @@ Phase 5 有三个必须落成默认值的参数，它们都无法从原理推导
 ## 决策
 
 1. **块大小 800 字符、重叠 120 字符**，作为 `MYAGENT_RAG_CHUNK_SIZE` /
-   `MYAGENT_RAG_CHUNK_OVERLAP` 的默认值（`src/myagent/config/settings.py:136`、
-   `src/myagent/config/settings.py:137`）。重叠固定为块大小的 15%。
-2. **`top_k = 5`**，作为 `MYAGENT_RAG_TOP_K` 的默认值（`src/myagent/config/settings.py:138`）。
+   `MYAGENT_RAG_CHUNK_OVERLAP` 的默认值（`src/myagent/config/settings.py:138`、
+   `src/myagent/config/settings.py:139`）。重叠固定为块大小的 15%。
+2. **`top_k = 5`**，作为 `MYAGENT_RAG_TOP_K` 的默认值（`src/myagent/config/settings.py:140`）。
 3. **不引入模型型 reranker**：V1 只有 `IdentityReranker`（默认）与 `ScoreReranker`
    （`src/myagent/rag/reranker.py:39`、`:49`），两者都不依赖第三方服务。
    引入条件是 PLAN 5.7 写明的「`hit@3` 的提升 > 延迟增量」，**留待 Phase 8 用更大的标注集判定**。

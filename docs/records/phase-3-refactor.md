@@ -17,10 +17,10 @@
 
 | # | 问题 | 可验证的完成条件 |
 | --- | --- | --- |
-| 1 | 「可替换」最容易停留在口号 | 用 AST 检查核心模块的 import：不出现 `openai` / `qdrant_client` / `sqlite3`，也不出现具体实现（`tests/test_contracts.py:435`） |
-| 2 | 契约的形状容易定错（比如为了省事把 `Any` 塞进去） | 每个契约配一个**不继承任何东西**的假实现，用它跑通链路（`tests/test_contracts.py:305`、`:341`） |
+| 1 | 「可替换」最容易停留在口号 | 用 AST 检查核心模块的 import：不出现 `openai` / `qdrant_client` / `sqlite3`，也不出现具体实现（`tests/test_contracts.py:484`） |
+| 2 | 契约的形状容易定错（比如为了省事把 `Any` 塞进去） | 每个契约配一个**不继承任何东西**的假实现，用它跑通链路（`tests/test_contracts.py:348`、`:386`） |
 | 3 | 上下文预算不能只写在文档里 | `ContextManager` 有 `priority` / `budget_tokens`，超预算时行为明确（V1 报错，Phase 6 裁剪） |
-| 4 | 换实现要真的只改一处 | 换模型只改 `.env`（`tests/test_contracts.py:387`）；加工具只 `register`（`tests/test_contracts.py:322`） |
+| 4 | 换实现要真的只改一处 | 换模型只改 `.env`（`tests/test_contracts.py:393`）；加工具只 `register`（`tests/test_contracts.py:328`） |
 
 ## 3. Baseline
 
@@ -59,9 +59,9 @@ cli.py ──▶ runtime.py ──▶ 具体实现（OpenAICompatModel / builtin
 | --- | --- | --- |
 | 契约用 `Protocol`，不强制继承 | ADR-0007 | `src/myagent/tools/base.py:152`（`BaseTool`）+ `:187`（`Tool(ABC)` 降为便利实现） |
 | 契约就近定义，不建 `protocols.py` | ADR-0007 | `rag/`、`memory/` 各自持有契约（`src/myagent/rag/retriever.py:43`） |
-| `ContextSection` 带优先级但本阶段不裁剪 | PLAN 3.3 | 超预算抛 `ContextBudgetExceeded`（`src/myagent/agent/context.py:173`） |
-| 检索结果以 `ContextItem` 交给上下文 | `agent` 不能依赖 `memory` / `rag` | `src/myagent/agent/context.py:75` |
-| 运行期上限独立成 `AgentRuntimeConfig` | PLAN 3.2 | 预算公式 `context_window - max_tokens - 1024`（`src/myagent/agent/runtime.py:73`） |
+| `ContextSection` 带优先级但本阶段不裁剪 | PLAN 3.3 | 超预算抛 `ContextBudgetExceeded`（`src/myagent/agent/context.py:137`；Phase 6 改名为 `ContextWindowExceeded`，只在 required 段也放不下时才抛） |
+| 检索结果以 `ContextItem` 交给上下文 | `agent` 不能依赖 `memory` / `rag` | `src/myagent/agent/context.py:161` |
+| 运行期上限独立成 `AgentRuntimeConfig` | PLAN 3.2 | 预算公式 `context_window - max_tokens - 1024`（`src/myagent/agent/runtime.py:84`） |
 | 超预算不落盘、模型失败仍落盘 | 请求是否真的发出去 | `src/myagent/agent/loop.py:186`、`:202` |
 | 新增 `tokens.py` | Phase 5/6 要用同一把尺子 | `src/myagent/tokens.py:37` |
 
@@ -115,10 +115,10 @@ scripts/check.sh
 
 | 断言 | 位置 | 说明 |
 | --- | --- | --- |
-| 六个扩展点是结构类型 | `tests/test_contracts.py:252` | `isinstance(DuckTool(), BaseTool)` 等；假件 `__mro__` 里只有 `object`（`:266`） |
-| 契约不全就不算满足契约 | `tests/test_contracts.py:274` | `ScriptedModel` 只有 `generate`，因此**不**是 `BaseModel`——`stream` / `count_tokens` 也是契约的一部分 |
-| 假件能跑通整条链路 | `tests/test_contracts.py:305`、`:341` | 假模型 + 假工具 + 假 context + 假 session store，一次 `run_once` 正常返回 |
-| 依赖方向 | `tests/test_contracts.py:435`、`:442`、`:446` | AST 检查核心模块不 import SDK / 具体实现，且具体实现只在 `myagent.runtime` 碰面 |
+| 六个扩展点是结构类型 | `tests/test_contracts.py:277` | `isinstance(DuckTool(), BaseTool)` 等；假件 `__mro__` 里只有 `object`（`:293`） |
+| 契约不全就不算满足契约 | `tests/test_contracts.py:301` | `ScriptedModel` 只有 `generate`，因此**不**是 `BaseModel`——`stream` / `count_tokens` 也是契约的一部分 |
+| 假件能跑通整条链路 | `tests/test_contracts.py:348`、`:386` | 假模型 + 假工具 + 假 context + 假 session store，一次 `run_once` 正常返回 |
+| 依赖方向 | `tests/test_contracts.py:484`、`:491`、`:495` | AST 检查核心模块不 import SDK / 具体实现，且具体实现只在 `myagent.runtime` 碰面 |
 
 ### 7.2 真实 transcript（`nanobot/` 未参与，`cli:phase3` 会话）
 
@@ -139,7 +139,7 @@ scripts/check.sh
 三点可以直接从落盘结构读出来：
 
 1. **系统块（含 section 合并后的 system 消息）没有落盘**：第 2 行就是用户消息，
-   这正是 `transcript_start`（`src/myagent/agent/context.py:149`）的作用；
+   这正是 `transcript_start`（`src/myagent/agent/context.py:312`）的作用；
 2. **第二轮只追加本轮消息**：第 8 行紧接第 7 行，历史没有被重写；
 3. **只读工具仍然并成一批**：第 3 行一条 assistant 消息带 3 个 `tool_calls`，
    第 4～6 行是三条 `tool` 观察（`src/myagent/agent/runner.py:220`）——重构没有改变执行语义。
@@ -164,9 +164,9 @@ Phase 2 基线是 258 项测试 / 1499 stmts；本阶段新增 46 项测试、26
 
 | 判定项 | 结果 |
 | --- | --- |
-| 换模型（DashScope → 本地 OpenAI 兼容端点）只改 `.env` | ✅ `tests/test_contracts.py:387`（两份 `Settings` → 两个 `OpenAICompatModel`，其余组件类型不变） |
-| 新增一个工具只需 `registry.register(...)`，runner / loop 零改动 | ✅ `tests/test_contracts.py:322`（新工具的 schema 原样到达提供方） |
-| `AgentRunner` 的 import 里不出现 `openai` / `qdrant_client` | ✅ `tests/test_contracts.py:435`（AST 检查 `openai` / `qdrant_client` / `sqlite3` / `httpx`） |
+| 换模型（DashScope → 本地 OpenAI 兼容端点）只改 `.env` | ✅ `tests/test_contracts.py:393`（两份 `Settings` → 两个 `OpenAICompatModel`，其余组件类型不变） |
+| 新增一个工具只需 `registry.register(...)`，runner / loop 零改动 | ✅ `tests/test_contracts.py:328`（新工具的 schema 原样到达提供方） |
+| `AgentRunner` 的 import 里不出现 `openai` / `qdrant_client` | ✅ `tests/test_contracts.py:441`（AST 检查 `openai` / `qdrant_client` / `sqlite3` / `httpx`） |
 | `scripts/check.sh` 全绿，`tests/test_contracts.py` 覆盖六个 Protocol | ✅ §7.3、§7.1 |
 | 四个答辩问题写进 `docs/design.md` 并指向上游锚点或本仓库代码 | ✅ `docs/design.md` §6.1～§6.4 |
 
@@ -230,7 +230,7 @@ chflags -R nohidden .venv
 | 遗留项 | 说明 / 计划 |
 | --- | --- |
 | 超预算只报错、不裁剪 | Phase 6 按 `ContextSection.priority` 裁剪；`required` section 放不下时才保留这个错误 |
-| `compact()` 是空实现 | Phase 6 实现摘要压缩，并前移 `Session.last_archived`（`src/myagent/session/base.py:38`） |
+| `compact()` 是空实现 | Phase 6 实现摘要压缩，并前移 `Session.last_archived`（`src/myagent/session/base.py:45`） |
 | `ContextRequest.memories` / `.rag_chunks` 没有人填 | Phase 4 接 `BaseMemory`、Phase 5 接 `BaseRetriever`，都要在 `build_agent` 里加一行 |
 | `BaseEmbedder` / `BaseVectorStore` / `BaseRetriever` 没有实现 | Phase 5 |
 | `count_tokens()` 仍返回 `None` | Phase 6 用真实 tokenizer 或 provider 计数替换 `tokens.estimate_tokens` 的估算 |

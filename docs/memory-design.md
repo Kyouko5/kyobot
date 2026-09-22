@@ -4,7 +4,7 @@
 - 关联文档：[`docs/memory.md`](./memory.md)（上游 nanobot 的记忆机制）、
   [`docs/decision-records/0008-layered-memory.md`](./decision-records/0008-layered-memory.md)（决策）、
   [`docs/records/phase-4-memory.md`](./records/phase-4-memory.md)（实验与质量门）
-- 代码入口：`src/myagent/memory/`（13 个文件 2284 行）；装配点 `src/myagent/runtime.py:87`（`build_memory`）
+- 代码入口：`src/myagent/memory/`（13 个文件 2284 行）；装配点 `src/myagent/runtime.py:121`（`build_memory`）
 
 ## 0. 一句话
 
@@ -48,7 +48,7 @@ MemoryManager（门面：write / recall / context / consolidate，src/myagent/me
 
 ```text
 一轮对话（user + assistant + 工具结果）
-   │  loop 的 save 阶段之后：AgentLoop._observe_turn（src/myagent/agent/loop.py:239）
+   │  loop 的 save 阶段之后：AgentLoop._observe_turn（src/myagent/agent/loop.py:278）
    ▼
 MemoryManager.remember → MemoryExtractor.extract（src/myagent/memory/extractor.py:150）
    │  规则兜底（我是/我偏好/我的项目是）+ LLM 抽取（JSON schema）
@@ -86,7 +86,7 @@ Consolidator：Episodic → Semantic（src/myagent/memory/consolidator.py:92，`
 三个配套类型：
 
 - `MemoryHit`（`src/myagent/memory/types.py:144`）= `record` + `score` + `reason`；
-  `reason` 是 `"vector"` 或 `"keyword"`，CLI 直接打印成 `via=vector`（`src/myagent/cli.py:142`）。
+  `reason` 是 `"vector"` 或 `"keyword"`，CLI 直接打印成 `via=vector`（`src/myagent/cli.py:180`）。
 - `MemoryContext`（`src/myagent/memory/types.py:157`）= 一次召回的完整结果：`hits` / `degraded` / `note`。
   `degraded=True` 表示"向量库不可用，答案只来自关键词"，`note` 是给人看的原因。
 - `parse_datetime` / `utcnow`（`src/myagent/memory/types.py:49`、`:59`）：SQLite 边界上只认 ISO8601 字符串。
@@ -131,9 +131,9 @@ memory_vectors(                    -- 向量落库状态：避免重复 embeddin
 ### 3.2 Qdrant：向量与过滤（`src/myagent/memory/vector_index.py`）
 
 - **独立 collection**：`MYAGENT_QDRANT_MEMORY_COLLECTION`，默认 `myagent_memories`
-  （`src/myagent/config/settings.py:146`），与文档向量的 `myagent_documents` 分开。
+  （`src/myagent/config/settings.py:41`），与文档向量的 `myagent_documents` 分开。
   原因见 ADR-0008：记忆按 id 删除、文档整篇重灌，混在一起会让一次清理误伤另一类数据。
-  `QdrantSettings.__post_init__` 在两者相等时直接抛 `ValueError`（`src/myagent/config/settings.py:180`）。
+  `QdrantSettings.__post_init__` 在两者相等时直接抛 `ValueError`（`src/myagent/config/settings.py:182`）。
 - **payload 只有四个字段**（`src/myagent/memory/vector_index.py:198`）：
 
   ```json
@@ -152,7 +152,7 @@ memory_vectors(                    -- 向量落库状态：避免重复 embeddin
 
 `MemoryIndex`（`src/myagent/memory/vector_index.py:61`）是本模块唯一的契约（`ensure_collection` / `upsert` /
 `search` / `delete` / `count`），只有 `vector_index.py` import `qdrant_client`；
-离线测试用 `tests/fakes.py:131` 的 `DictionaryIndex` 替换它。
+离线测试用 `tests/fakes.py:133` 的 `DictionaryIndex` 替换它。
 
 ## 4. 写入策略：什么该记，什么不记（PLAN 4.6）
 
@@ -219,7 +219,7 @@ query
 | --- | --- | --- |
 | 衰减只作用于 Episodic | Semantic 是"我知道什么"，不该被时间吃掉；`decay()` 对非 episodic 返回 `1.0` | `src/myagent/memory/retriever.py:125` |
 | 命中都带 `memory_id` | 返回的 `record` 是从 SQLite 重新读出来的（`src/myagent/memory/retriever.py:145`），所以"点还在、记录已删"的陈旧向量不会漏进答案；Phase 8 用 `MemoryContext.ids` 算 hit@k | `src/myagent/memory/retriever.py:145` |
-| 失败降级，不抛异常 | Qdrant 或 embedding 任意一个失败 → `degraded=True` + 可读 `note` + 关键词结果；`src/myagent/agent/loop.py:224` 的 `_recall_memories` 还会把异常兜成"这轮没有记忆" | `src/myagent/memory/retriever.py:79` |
+| 失败降级，不抛异常 | Qdrant 或 embedding 任意一个失败 → `degraded=True` + 可读 `note` + 关键词结果；`src/myagent/agent/loop.py:247` 的 `_recall_memories` 还会把异常兜成"这轮没有记忆" | `src/myagent/memory/retriever.py:79` |
 | 同分按新→旧 | 排序键是 `(-score, -created_at)`，衰减之后的并列取更新的那条 | `src/myagent/memory/retriever.py:145` |
 
 ## 6. 巩固：Episodic → Semantic（PLAN 4.8，对应上游 Dream）
@@ -256,22 +256,22 @@ query
 ## 7. 装配：谁在什么时候调用记忆
 
 ```text
-myagent chat ──▶ src/myagent/runtime.py:41 build_agent
-                     └─ memory=build_memory(...)（src/myagent/runtime.py:87）
-myagent memory … ─▶ src/myagent/runtime.py:87 build_memory（只要记忆，不要 Loop）
+myagent chat ──▶ src/myagent/runtime.py:47 build_agent
+                     └─ memory=build_memory(...)（src/myagent/runtime.py:121）
+myagent memory … ─▶ src/myagent/runtime.py:121 build_memory（只要记忆，不要 Loop）
 
-AgentLoop（src/myagent/agent/loop.py:131 收 memory）
- ├─ build 阶段：_recall_memories（src/myagent/agent/loop.py:224）→ MemoryManager.recall → ContextRequest.memories
- └─ save 阶段：_observe_turn（src/myagent/agent/loop.py:239）→ MemoryManager.observe → extract → write
+AgentLoop（src/myagent/agent/loop.py:132 收 memory）
+ ├─ build 阶段：_recall_memories（src/myagent/agent/loop.py:247）→ MemoryManager.recall → ContextRequest.memories
+ └─ save 阶段：_observe_turn（src/myagent/agent/loop.py:278）→ MemoryManager.observe → extract → write
 ```
 
 关键边界：`src/myagent/agent/` **不 import `myagent.memory`**。Loop 只认
-`MemoryProvider` 这个 Protocol（`src/myagent/agent/context.py:90`）：
+`MemoryProvider` 这个 Protocol（`src/myagent/agent/context.py:180`）：
 `recall(query, session_key) -> Sequence[ContextItem]` 与 `observe(session_key, messages)`。
-两个方向都失败即降级（`src/myagent/agent/loop.py:224`、`:239` 里 `except Exception` → warning），
+两个方向都失败即降级（`src/myagent/agent/loop.py:247`、`:239` 里 `except Exception` → warning），
 因为"记忆"是增强项：Qdrant 挂掉应该损失上下文质量，而不是让这一轮对话失败。
 
-### 7.1 配置项（`src/myagent/config/settings.py:280`）
+### 7.1 配置项（`src/myagent/config/settings.py:282`）
 
 | 环境变量 | 默认 | 作用 |
 | --- | --- | --- |
@@ -290,15 +290,15 @@ AgentLoop（src/myagent/agent/loop.py:131 收 memory）
 ## 8. CLI（PLAN 4.9）
 
 ```bash
-myagent memory list --kind semantic -n 20     # 看记住了什么（src/myagent/cli.py:120）
-myagent memory search "我的研究方向" -k 5      # 召回 + 分数 + 来源路径（src/myagent/cli.py:133）
-myagent memory add "用户偏好 Python" --kind semantic --importance 0.8   # 手工写一条（src/myagent/cli.py:150）
-myagent memory consolidate --dry-run          # 只看会合并什么（src/myagent/cli.py:176）
-myagent memory forget <memory_id>             # 删除一条（src/myagent/cli.py:189）
+myagent memory list --kind semantic -n 20     # 看记住了什么（src/myagent/cli.py:158）
+myagent memory search "我的研究方向" -k 5      # 召回 + 分数 + 来源路径（src/myagent/cli.py:171）
+myagent memory add "用户偏好 Python" --kind semantic --importance 0.8   # 手工写一条（src/myagent/cli.py:188）
+myagent memory consolidate --dry-run          # 只看会合并什么（src/myagent/cli.py:214）
+myagent memory forget <memory_id>             # 删除一条（src/myagent/cli.py:227）
 ```
 
 `memory search` 会打印 `score=0.686 via=vector` 这样的行，并在降级时把
-`note` 打到 stderr（`src/myagent/cli.py:142`）——"没有结果"和"向量库不可用"必须能区分开。
+`note` 打到 stderr（`src/myagent/cli.py:180`）——"没有结果"和"向量库不可用"必须能区分开。
 
 ## 9. 已知限制与不做什么
 

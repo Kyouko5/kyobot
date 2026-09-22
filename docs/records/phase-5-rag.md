@@ -42,22 +42,22 @@
 
 | 决策 | 依据 | 位置 |
 | --- | --- | --- |
-| 两段流水线：`ingest` 幂等、`retrieve` 无状态 | PLAN 5.0 | `src/myagent/rag/pipeline.py:142`、`:211` |
+| 两段流水线：`ingest` 幂等、`retrieve` 无状态 | PLAN 5.0 | `src/myagent/rag/pipeline.py:171`、`:211` |
 | 文档身份 = 归一化全文的 sha256 前 16 位 | PLAN 5.1 | `src/myagent/rag/types.py:54` |
 | 记录在 SQLite（`documents` + `chunks`），向量在 Qdrant | ADR-0003 | `src/myagent/rag/store.py:45`、`src/myagent/rag/vectorstore.py:85` |
 | 归一化只有一处（`\r\n` / 行尾空白 / 连续空行） | 内容哈希必须稳定 | `src/myagent/rag/loader.py:83` |
 | 页码与标题是 loader 的责任（`page_spans` / `headings`） | chunker 不该知道 PDF 是什么 | `src/myagent/rag/loader.py:158`、`src/myagent/rag/types.py:76`、`:91` |
 | 切分：段落 → 句子 → 字符 + 重叠 | PLAN 5.3 | `src/myagent/rag/chunker.py:86`、`:109` |
-| 默认 800 字符 / 120 重叠 / `top_k=5` | 本阶段实验（§6.1） | `src/myagent/config/settings.py:136`、ADR-0009 |
-| 维度：`EMBED_DIM` 留空则探测一次并写回 `.env` | PLAN 5.4 | `src/myagent/rag/pipeline.py:201`、`src/myagent/config/env.py:124` |
-| 维度两处校验（配置 vs 模型、模型 vs 已有集合） | 静默失败最难查 | `src/myagent/rag/pipeline.py:191`、`src/myagent/rag/vectorstore.py:115` |
+| 默认 800 字符 / 120 重叠 / `top_k=5` | 本阶段实验（§6.1） | `src/myagent/config/settings.py:138`、ADR-0009 |
+| 维度：`EMBED_DIM` 留空则探测一次并写回 `.env` | PLAN 5.4 | `src/myagent/rag/pipeline.py:230`、`src/myagent/config/env.py:124` |
+| 维度两处校验（配置 vs 模型、模型 vs 已有集合） | 静默失败最难查 | `src/myagent/rag/pipeline.py:220`、`src/myagent/rag/vectorstore.py:115` |
 | 归一化默认开启（cosine ≡ 点积） | PLAN 5.4 | `src/myagent/rag/embedder.py:207`、`:231` |
 | 点 id = uuid5(块 id)，逻辑 id 进 payload | Phase 4 的教训（§8.2） | `src/myagent/rag/vectorstore.py:209`、`:220` |
 | 命中回 SQLite 解析，解析不到就跳过 | 「向量有、记录没有」的内容永不进 prompt | `src/myagent/rag/retriever.py:141` |
 | 检索失败**抛出**（不像记忆那样降级） | RAG 没有可退的兜底记录 | `src/myagent/rag/retriever.py:123` |
 | reranker 只给两个无依赖实现，不引模型 | 本阶段实验（§6.2） | `src/myagent/rag/reranker.py:39`、`:49` |
-| `embedder` 传输层从 memory 搬到 rag | 嵌入能力属于 RAG | `src/myagent/rag/embedder.py:109`、`src/myagent/runtime.py:106` |
-| 装配单独提供 `build_rag()` | CLI 要「只要 RAG、不要聊天模型」 | `src/myagent/runtime.py:117` |
+| `embedder` 传输层从 memory 搬到 rag | 嵌入能力属于 RAG | `src/myagent/rag/embedder.py:109`、`src/myagent/runtime.py:140` |
+| 装配单独提供 `build_rag()` | CLI 要「只要 RAG、不要聊天模型」 | `src/myagent/runtime.py:151` |
 
 ## 4. 实现
 
@@ -248,10 +248,10 @@ RAG 模块自身：`src/myagent/rag/` 10 个文件、733 stmts / 138 branches，
 | --- | --- |
 | `myagent ingest` 后 `myagent search` 返回带 `document_id#index` 的来源 | ✅ §6.4 |
 | 端到端：检索结果经 `build_context()` 注入，回答能引用到具体 chunk | ✅ §6.4（模型引用 `[a8361ccbbb4d80a2#8]`） |
-| 幂等：同一文件 ingest 两次，行数与 Qdrant point 数不变 | ✅ §6.4、`tests/rag/test_pipeline.py:77` |
+| 幂等：同一文件 ingest 两次，行数与 Qdrant point 数不变 | ✅ §6.4、`tests/rag/test_pipeline.py:78` |
 | 维度探测：`EMBED_DIM` 留空 → 自动探测 → collection 建立成功 | ✅ §6.4（1024） |
 | 维度探测里的 `myagent config check` 报出维度 | ⚠️ **偏差**：该命令不存在（见下） |
-| 离线测试不发起网络请求 | ✅ 591 项在无网沙箱里全绿；假件在 `tests/fakes.py:105`、`:183` |
+| 离线测试不发起网络请求 | ✅ 591 项在无网沙箱里全绿；假件在 `tests/fakes.py:107`、`:185` |
 | 实验表：chunk size 400/800/1200 的 hit@5 / 平均块长 / 延迟 | ✅ §6.1 |
 | 实验表：「RAG OFF vs RAG ON」定性对比 | ✅ §6.3 |
 
@@ -284,7 +284,7 @@ embedding 可调用、collection 维度一致"）。Phase 5 的 CLI 只有 `chat
 
 ### 8.2 `myagent search` 的一条错误分支在生产路径上走不到
 
-**现象**：覆盖率报告指出 `src/myagent/cli.py:185` 的 `except MissingEnvError: return 2` 从未执行。
+**现象**：覆盖率报告指出 `src/myagent/cli.py:223` 的 `except MissingEnvError: return 2` 从未执行。
 
 **根因**：`VectorRetriever._embed`（`src/myagent/rag/retriever.py:123`）把 provider 的一切失败
 （含缺凭据的 `MissingEnvError`）都翻译成 `EmbeddingError`，所以这条分支在"只装了假件"的
