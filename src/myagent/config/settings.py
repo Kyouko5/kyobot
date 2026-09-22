@@ -47,10 +47,14 @@ ENV_EMBED_MODEL_NAME: Final = "EMBED_MODEL_NAME"
 ENV_EMBED_API_KEY: Final = "EMBED_API_KEY"
 ENV_EMBED_BASE_URL: Final = "EMBED_BASE_URL"
 ENV_EMBED_DIM: Final = "EMBED_DIM"
+ENV_EMBED_BATCH_SIZE: Final = "EMBED_BATCH_SIZE"
 
 SUPPORTED_EMBED_MODEL_TYPES: Final = ("dashscope", "openai")
 DEFAULT_EMBED_MODEL_TYPE: Final = "dashscope"
 DEFAULT_EMBED_MODEL_NAME: Final = "qwen3.7-text-embedding-flash"
+# The endpoints reject oversized batches, and a document ingest is not a turn's
+# two or three memories: PLAN 5.4 fixes the default at 16 texts per request.
+DEFAULT_EMBED_BATCH_SIZE: Final = 16
 
 _FALLBACK_API_KEY_VARS: Final = {
     "dashscope": "DASHSCOPE_API_KEY",
@@ -117,6 +121,21 @@ DEFAULT_MEMORY_MIN_IMPORTANCE: Final = 0.5
 DEFAULT_MEMORY_DEDUP_THRESHOLD: Final = 0.95
 DEFAULT_MEMORY_DEDUP_RECENT: Final = 8
 DEFAULT_MEMORY_SHORT_QUERY_CHARS: Final = 8
+
+# --- Phase 5: RAG ------------------------------------------------------------
+
+ENV_RAG_CHUNK_SIZE: Final = "MYAGENT_RAG_CHUNK_SIZE"
+ENV_RAG_CHUNK_OVERLAP: Final = "MYAGENT_RAG_CHUNK_OVERLAP"
+ENV_RAG_TOP_K: Final = "MYAGENT_RAG_TOP_K"
+
+# ADR-0009 picks these from the chunk-size experiment in
+# docs/records/phase-5-rag.md: 800 characters of mixed Chinese/English text is
+# roughly 300–400 tokens, which fits a citation into a context budget without
+# cutting a paragraph in half, and 120 characters of overlap keeps the sentence
+# that straddles a boundary retrievable from both sides.
+DEFAULT_RAG_CHUNK_SIZE: Final = 800
+DEFAULT_RAG_CHUNK_OVERLAP: Final = 120
+DEFAULT_RAG_TOP_K: Final = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +218,7 @@ class EmbeddingSettings:
     api_key: str | None = None
     base_url: str | None = None
     dim: int | None = None
+    batch_size: int = DEFAULT_EMBED_BATCH_SIZE
 
     def __post_init__(self) -> None:
         if self.model_type not in SUPPORTED_EMBED_MODEL_TYPES:
@@ -214,6 +234,8 @@ class EmbeddingSettings:
             )
         if self.dim is not None and self.dim <= 0:
             raise ValueError(f"EMBED_DIM must be a positive integer, got {self.dim}")
+        if self.batch_size <= 0:
+            raise ValueError(f"{ENV_EMBED_BATCH_SIZE} must be positive, got {self.batch_size}")
 
     @classmethod
     def from_env(cls) -> EmbeddingSettings:
@@ -236,6 +258,11 @@ class EmbeddingSettings:
             api_key=api_key,
             base_url=get_env(ENV_EMBED_BASE_URL),
             dim=_parse_dim(get_env(ENV_EMBED_DIM)),
+            batch_size=_parse_positive_int(
+                ENV_EMBED_BATCH_SIZE,
+                get_env(ENV_EMBED_BATCH_SIZE),
+                DEFAULT_EMBED_BATCH_SIZE,
+            ),
         )
 
     def resolved_base_url(self) -> str | None:
@@ -323,6 +350,53 @@ class MemorySettings:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RagSettings:
+    """How the RAG pipeline chunks documents and how many chunks it retrieves.
+
+    The values come from ADR-0009, which is where the 400/800/1200 chunk-size
+    experiment of ``docs/records/phase-5-rag.md`` is written down. They are
+    settings and not constants so Phase 8 can replay that experiment by setting
+    ``MYAGENT_RAG_CHUNK_SIZE`` instead of editing the chunker.
+    """
+
+    chunk_size: int = DEFAULT_RAG_CHUNK_SIZE
+    chunk_overlap: int = DEFAULT_RAG_CHUNK_OVERLAP
+    top_k: int = DEFAULT_RAG_TOP_K
+
+    def __post_init__(self) -> None:
+        if self.chunk_size <= 0:
+            raise ValueError(f"{ENV_RAG_CHUNK_SIZE} must be positive, got {self.chunk_size}")
+        if self.chunk_overlap < 0:
+            raise ValueError(
+                f"{ENV_RAG_CHUNK_OVERLAP} must not be negative, got {self.chunk_overlap}"
+            )
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError(
+                f"{ENV_RAG_CHUNK_OVERLAP} ({self.chunk_overlap}) must be smaller than "
+                f"{ENV_RAG_CHUNK_SIZE} ({self.chunk_size}); otherwise a window could "
+                "never grow past its overlap"
+            )
+        if self.top_k <= 0:
+            raise ValueError(f"{ENV_RAG_TOP_K} must be positive, got {self.top_k}")
+
+    @classmethod
+    def from_env(cls) -> RagSettings:
+        """Build settings from the environment, loading ``.env`` first."""
+        load_env()
+        return cls(
+            chunk_size=_parse_positive_int(
+                ENV_RAG_CHUNK_SIZE, get_env(ENV_RAG_CHUNK_SIZE), DEFAULT_RAG_CHUNK_SIZE
+            ),
+            chunk_overlap=_parse_non_negative_int(
+                ENV_RAG_CHUNK_OVERLAP,
+                get_env(ENV_RAG_CHUNK_OVERLAP),
+                DEFAULT_RAG_CHUNK_OVERLAP,
+            ),
+            top_k=_parse_positive_int(ENV_RAG_TOP_K, get_env(ENV_RAG_TOP_K), DEFAULT_RAG_TOP_K),
+        )
+
+
 def _parse_dim(raw: str | None) -> int | None:
     """Parse ``EMBED_DIM``; blank means "let the service decide"."""
     if raw is None:
@@ -343,6 +417,19 @@ def _parse_positive_int(name: str, raw: str | None, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
+    return value
+
+
+def _parse_non_negative_int(name: str, raw: str | None, default: int) -> int:
+    """Parse an integer setting that may be zero, keeping the default when unset."""
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must not be negative, got {value}")
     return value
 
 
@@ -518,6 +605,7 @@ class Settings:
     qdrant: QdrantSettings
     embedding: EmbeddingSettings
     memory: MemorySettings = field(default_factory=MemorySettings)
+    rag: RagSettings = field(default_factory=RagSettings)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -529,4 +617,5 @@ class Settings:
             qdrant=QdrantSettings.from_env(),
             embedding=EmbeddingSettings.from_env(),
             memory=MemorySettings.from_env(),
+            rag=RagSettings.from_env(),
         )

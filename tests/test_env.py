@@ -14,6 +14,7 @@ from myagent.config.env import (
     get_bool_env,
     get_env,
     load_env,
+    remember_env,
     require_env,
 )
 
@@ -154,3 +155,52 @@ def test_get_bool_env_defaults_and_rejects_junk(isolated_environ):
     isolated_environ["MYAGENT_QDRANT_PREFER_GRPC"] = "maybe"
     with pytest.raises(ValueError, match="must be a boolean"):
         get_bool_env("MYAGENT_QDRANT_PREFER_GRPC")
+
+
+# --- Phase 5: writing a value back (the EMBED_DIM probe) ---------------------
+
+
+def test_remember_env_fills_a_blank_line_in_place(tmp_path, isolated_environ):
+    env_file = write_env(tmp_path, LLM_MODEL="m", EMBED_DIM="", QDRANT_URL="http://localhost:6333")
+    isolated_environ[ENV_FILE_VAR] = str(env_file)
+
+    updated = remember_env("EMBED_DIM", "1024")
+
+    assert updated == env_file
+    assert os.environ["EMBED_DIM"] == "1024"
+    assert env_file.read_text(encoding="utf-8").splitlines() == [
+        "LLM_MODEL=m",
+        "EMBED_DIM=1024",
+        "QDRANT_URL=http://localhost:6333",
+    ]
+
+
+def test_remember_env_appends_a_missing_variable(tmp_path, isolated_environ):
+    env_file = write_env(tmp_path, LLM_MODEL="m")
+    isolated_environ[ENV_FILE_VAR] = str(env_file)
+
+    remember_env("EMBED_DIM", "1024")
+
+    assert env_file.read_text(encoding="utf-8").splitlines() == ["LLM_MODEL=m", "EMBED_DIM=1024"]
+    load_env()  # a later run reads exactly what was written
+    assert get_env("EMBED_DIM") == "1024"
+
+
+def test_remember_env_leaves_comments_and_other_variables_alone(tmp_path, isolated_environ):
+    env_file = tmp_path / ".env"
+    env_file.write_text("# a comment\nEMBED_DIM=\n", encoding="utf-8")
+    isolated_environ[ENV_FILE_VAR] = str(env_file)
+
+    remember_env("EMBED_DIM", "768")
+
+    assert env_file.read_text(encoding="utf-8") == "# a comment\nEMBED_DIM=768\n"
+
+
+def test_remember_env_updates_the_process_when_there_is_no_file(
+    tmp_path, isolated_environ, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(ENV_FILE_VAR, raising=False)
+
+    assert remember_env("EMBED_DIM", "1536") is None
+    assert os.environ["EMBED_DIM"] == "1536"

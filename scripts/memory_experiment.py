@@ -39,7 +39,6 @@ from qdrant_client import QdrantClient  # noqa: E402
 
 from myagent.agent.types import Message  # noqa: E402
 from myagent.config.settings import MemorySettings, Settings  # noqa: E402
-from myagent.memory.embedder import OpenAICompatEmbedder  # noqa: E402
 from myagent.memory.extractor import MemoryExtractor, Turn  # noqa: E402
 from myagent.memory.manager import MemoryManager  # noqa: E402
 from myagent.memory.sqlite_store import SQLiteMemoryStore, terms  # noqa: E402
@@ -47,6 +46,7 @@ from myagent.memory.types import EPISODIC, SEMANTIC, MemoryRecord  # noqa: E402
 from myagent.memory.vector_index import QdrantMemoryIndex  # noqa: E402
 from myagent.models.base import BaseModel  # noqa: E402
 from myagent.models.openai_compat import OpenAICompatModel  # noqa: E402
+from myagent.rag.embedder import OpenAICompatEmbedder  # noqa: E402
 from myagent.session.manager import JsonlSessionStore  # noqa: E402
 
 # --- experiment 1: 20 labelled sentences (should it be written?) --------------

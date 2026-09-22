@@ -29,11 +29,9 @@ from myagent.config.settings import (
     QdrantSettings,
     SQLiteSettings,
 )
-from myagent.memory import embedder as embedder_module
 from myagent.memory import vector_index as vector_index_module
 from myagent.memory.base import BaseMemory
 from myagent.memory.consolidator import Consolidator
-from myagent.memory.embedder import EmbeddingError, OpenAICompatEmbedder
 from myagent.memory.episodic import EpisodicMemory
 from myagent.memory.extractor import MemoryExtractor, Turn
 from myagent.memory.manager import MemoryManager
@@ -58,6 +56,8 @@ from myagent.memory.vector_index import (
 )
 from myagent.memory.working import WorkingMemory
 from myagent.models.base import LLMError, LLMResponse
+from myagent.rag import embedder as embedder_module
+from myagent.rag.embedder import EmbeddingError, OpenAICompatEmbedder
 from myagent.session.manager import JsonlSessionStore
 
 NOW = datetime(2026, 9, 20, 12, 0, 0, tzinfo=UTC)

@@ -14,6 +14,7 @@ from myagent.config.settings import (
     DEFAULT_AGENT_SESSIONS_DIR,
     DEFAULT_AGENT_TOOL_TIMEOUT_S,
     DEFAULT_AGENT_WORKSPACE,
+    DEFAULT_EMBED_BATCH_SIZE,
     DEFAULT_EMBED_MODEL_NAME,
     DEFAULT_EMBED_MODEL_TYPE,
     DEFAULT_LLM_CONTEXT_WINDOW,
@@ -28,12 +29,16 @@ from myagent.config.settings import (
     DEFAULT_QDRANT_COLLECTION,
     DEFAULT_QDRANT_MEMORY_COLLECTION,
     DEFAULT_QDRANT_URL,
+    DEFAULT_RAG_CHUNK_OVERLAP,
+    DEFAULT_RAG_CHUNK_SIZE,
+    DEFAULT_RAG_TOP_K,
     DEFAULT_SQLITE_PATH,
     AgentSettings,
     EmbeddingSettings,
     LLMSettings,
     MemorySettings,
     QdrantSettings,
+    RagSettings,
     Settings,
     SQLiteSettings,
 )
@@ -473,3 +478,88 @@ def test_memory_numbers_are_parsed_from_the_environment(isolated_environ, name, 
 def test_memory_settings_are_validated(kwargs, message):
     with pytest.raises(ValueError, match=message):
         MemorySettings(**kwargs)
+
+
+# --- Phase 5: RAG ------------------------------------------------------------
+
+
+def test_rag_defaults_are_the_adr_0009_values():
+    rag = RagSettings.from_env()
+
+    assert rag == RagSettings()
+    assert (
+        (rag.chunk_size, rag.chunk_overlap, rag.top_k)
+        == (
+            DEFAULT_RAG_CHUNK_SIZE,
+            DEFAULT_RAG_CHUNK_OVERLAP,
+            DEFAULT_RAG_TOP_K,
+        )
+        == (800, 120, 5)
+    )
+
+
+def test_rag_reads_the_env_file(isolated_environ, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "MYAGENT_RAG_CHUNK_SIZE=400",
+                "MYAGENT_RAG_CHUNK_OVERLAP=0",
+                "MYAGENT_RAG_TOP_K=10",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    isolated_environ["MYAGENT_ENV_FILE"] = str(env_file)
+
+    rag = RagSettings.from_env()
+
+    assert (rag.chunk_size, rag.chunk_overlap, rag.top_k) == (400, 0, 10)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"chunk_size": 0}, "MYAGENT_RAG_CHUNK_SIZE must be positive"),
+        ({"chunk_overlap": -1}, "MYAGENT_RAG_CHUNK_OVERLAP must not be negative"),
+        ({"chunk_size": 100, "chunk_overlap": 100}, "must be smaller than"),
+        ({"top_k": 0}, "MYAGENT_RAG_TOP_K must be positive"),
+    ],
+)
+def test_rag_settings_are_validated(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        RagSettings(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("MYAGENT_RAG_CHUNK_SIZE", "many", "must be an integer"),
+        ("MYAGENT_RAG_CHUNK_OVERLAP", "few", "must be an integer"),
+        ("MYAGENT_RAG_CHUNK_OVERLAP", "-5", "must not be negative"),
+        ("MYAGENT_RAG_TOP_K", "0", "must be positive"),
+    ],
+)
+def test_rag_numbers_are_parsed_from_the_environment(isolated_environ, name, value, message):
+    isolated_environ[name] = value
+
+    with pytest.raises(ValueError, match=message):
+        RagSettings.from_env()
+
+
+def test_every_settings_bundle_carries_rag(isolated_environ):
+    assert Settings.from_env().rag == RagSettings()
+
+
+def test_the_embedding_batch_size_defaults_and_reads_the_environment(isolated_environ):
+    assert EmbeddingSettings.from_env().batch_size == DEFAULT_EMBED_BATCH_SIZE == 16
+
+    isolated_environ["EMBED_BATCH_SIZE"] = "4"
+
+    assert EmbeddingSettings.from_env().batch_size == 4
+    with pytest.raises(ValueError, match="EMBED_BATCH_SIZE must be positive"):
+        EmbeddingSettings(batch_size=0)
+    isolated_environ["EMBED_BATCH_SIZE"] = "-1"
+    with pytest.raises(ValueError, match="EMBED_BATCH_SIZE must be positive"):
+        EmbeddingSettings.from_env()

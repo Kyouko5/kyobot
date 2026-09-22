@@ -23,6 +23,7 @@ dependencies = [
     "python-dotenv>=1.0", # ADR-0004: .env loading is the only secret entry point
     "openai>=1.50", # ADR-0006: one OpenAI-compatible client covers every Phase 2 provider
     "qdrant-client>=1.12", # ADR-0003/0008: the vector index behind myagent.memory.vector_index
+    "pypdf>=5.0", # ADR-0009: the PDF text layer behind myagent.rag.loader.PdfLoader
 ]
 
 [project.optional-dependencies]
@@ -80,6 +81,10 @@ ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 "src/myagent/tools/registry.py" = ["ANN401"]
 "src/myagent/tools/builtin/*.py" = ["ANN401"]
 "src/myagent/models/openai_compat.py" = ["ANN401"]
+# A Qdrant payload filter value is whatever the caller put in the contract's
+# `Filter` mapping (`src/myagent/rag/types.py`), and the SDK's match types are a
+# str/int/bool union: the value is dynamically typed at that one edge.
+"src/myagent/rag/vectorstore.py" = ["ANN401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["myagent"]

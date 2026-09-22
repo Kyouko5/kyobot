@@ -21,7 +21,7 @@ from myagent.config.settings import (
     SQLiteSettings,
 )
 from myagent.models.openai_compat import OpenAICompatModel
-from myagent.runtime import build_agent
+from myagent.runtime import build_agent, build_rag
 from myagent.session.manager import JsonlSessionStore
 from myagent.tools.registry import ToolRegistry
 
@@ -101,3 +101,31 @@ def test_runtime_limits_are_validated():
         AgentRuntimeConfig(max_tool_result_chars=0)
     with pytest.raises(ValueError, match="context_budget_tokens must be positive"):
         AgentRuntimeConfig(context_budget_tokens=-1)
+
+
+# --------------------------------------------------------------------------
+# Phase 5: build_rag
+# --------------------------------------------------------------------------
+
+
+def test_build_rag_wires_the_default_implementations(tmp_path):
+    from myagent.rag.pipeline import RagPipeline
+    from myagent.rag.store import SQLiteDocumentStore
+
+    pipeline = build_rag(settings(tmp_path))
+
+    assert isinstance(pipeline, RagPipeline)
+    assert isinstance(pipeline.store, SQLiteDocumentStore)
+    assert pipeline.store.path == tmp_path / "myagent.db"
+    assert (pipeline.settings.chunk_size, pipeline.settings.top_k) == (800, 5)
+
+
+def test_build_rag_accepts_an_injected_embedder(tmp_path):
+    from fakes import BagOfWordsEmbedder
+
+    embedder = BagOfWordsEmbedder()
+
+    pipeline = build_rag(settings(tmp_path), embedder=embedder)
+
+    assert pipeline.retriever.embedder is embedder
+    assert (pipeline.settings.chunk_overlap, pipeline.settings.top_k) == (120, 5)

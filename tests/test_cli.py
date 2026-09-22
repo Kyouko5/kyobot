@@ -353,3 +353,278 @@ def test_memory_rejects_an_unknown_kind(capsys):
 
     assert info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Phase 5: `myagent ingest|search|docs` (PLAN 5.8)
+# --------------------------------------------------------------------------
+
+
+def rag_pipeline(tmp_path, **overrides: object):
+    """A real ``RagPipeline`` over SQLite plus the offline RAG doubles."""
+    from fakes import BagOfWordsEmbedder, DictionaryVectorStore
+    from myagent.config.settings import SQLiteSettings
+    from myagent.rag.pipeline import RagPipeline
+    from myagent.rag.store import SQLiteDocumentStore
+
+    return RagPipeline(
+        SQLiteDocumentStore(SQLiteSettings(path=tmp_path / "documents.db")),
+        overrides.pop("embedder", None) or BagOfWordsEmbedder(),
+        overrides.pop("vectorstore", None) or DictionaryVectorStore(),
+        **overrides,
+    )
+
+
+@pytest.fixture
+def cli_rag(monkeypatch, tmp_path, isolated_env):
+    """Point the CLI at a throwaway RAG pipeline."""
+    pipeline = rag_pipeline(tmp_path)
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: pipeline)
+    return pipeline
+
+
+def paper(tmp_path, name: str = "graphrag.txt", text: str | None = None):
+    path = tmp_path / name
+    path.write_text(text or "GraphRAG walks a knowledge graph built from the document. " * 4)
+    return path
+
+
+def test_ingest_reports_the_document_the_chunks_and_the_dimension(capsys, tmp_path, cli_rag):
+    path = paper(tmp_path)
+
+    assert cli.main(["ingest", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    document_id = cli_rag.documents()[0].id
+    assert f"added {document_id}  1 chunk(s)  graphrag" in out
+    assert str(path) in out
+    assert "embedding dim=16 (probed, written to .env)" in out
+    assert "1 added, 0 updated, 1 chunk(s) total" in out
+
+
+def test_ingest_reports_a_document_with_nothing_to_embed(capsys, tmp_path, cli_rag):
+    """An empty file is still stored; with no vector there is no dimension to print."""
+    path = tmp_path / "blank.txt"
+    path.write_text("", encoding="utf-8")
+
+    assert cli.main(["ingest", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "0 chunk(s)" in out
+    assert "embedding dim=" not in out
+    assert "1 added, 0 updated, 0 chunk(s) total" in out
+
+
+def test_ingest_reports_a_second_run_as_an_update(capsys, tmp_path, cli_rag, monkeypatch):
+    from myagent.config.settings import EmbeddingSettings
+
+    path = paper(tmp_path)
+
+    cli.main(["ingest", str(path)])
+    # The next run starts from a .env that already carries the probed dimension,
+    # so the pipeline is built with it and nothing is probed again.
+    monkeypatch.setattr(
+        cli,
+        "build_rag",
+        lambda *args, **kwargs: rag_pipeline(tmp_path, embedding=EmbeddingSettings(dim=16)),
+    )
+    assert cli.main(["ingest", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "updated " in out
+    assert "embedding dim=16\n" in out  # configured, not probed
+    assert "0 added, 1 updated, 1 chunk(s) total" in out
+
+
+def test_ingest_explains_a_missing_file(capsys, cli_rag):
+    assert cli.main(["ingest", "nowhere.txt"]) == 1
+
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_ingest_explains_an_unsupported_format(capsys, tmp_path, cli_rag):
+    path = tmp_path / "paper.docx"
+    path.write_text("nope", encoding="utf-8")
+
+    assert cli.main(["ingest", str(path)]) == 1
+
+    assert "no loader for .docx" in capsys.readouterr().err
+
+
+def test_ingest_explains_a_dead_vector_store(capsys, tmp_path, monkeypatch, isolated_env):
+    from fakes import DictionaryVectorStore
+    from myagent.rag.vectorstore import VectorStoreError
+
+    dead = rag_pipeline(
+        tmp_path, vectorstore=DictionaryVectorStore(fail_with=VectorStoreError("Qdrant is down"))
+    )
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: dead)
+
+    assert cli.main(["ingest", str(paper(tmp_path))]) == 1
+
+    assert "Qdrant is down" in capsys.readouterr().err
+
+
+def test_ingest_explains_a_missing_credential(capsys, tmp_path, monkeypatch, isolated_env):
+    from myagent.config.env import MissingEnvError
+
+    class NeedsKey:
+        dim = 16
+
+        async def embed(self, texts):
+            raise MissingEnvError("EMBED_API_KEY")
+
+    keyless = rag_pipeline(tmp_path, embedder=NeedsKey())
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: keyless)
+
+    assert cli.main(["ingest", str(paper(tmp_path))]) == 2
+
+    assert "EMBED_API_KEY is not set" in capsys.readouterr().err
+
+
+def test_search_prints_a_citable_snippet(capsys, tmp_path, cli_rag):
+    path = paper(tmp_path)
+    cli.main(["ingest", str(path)])
+    document_id = cli_rag.documents()[0].id
+    capsys.readouterr()
+
+    assert cli.main(["search", "knowledge graph", "-k", "1"]) == 0
+
+    out = capsys.readouterr().out
+    assert f"[{document_id}#0] graphrag (no page)" in out
+    assert "score=" in out
+    assert "GraphRAG walks a knowledge graph" in out
+
+
+def test_search_can_be_limited_and_truncates_a_long_chunk(capsys, tmp_path, cli_rag):
+    from myagent.config.settings import RagSettings
+
+    long_text = "retrieval " * 100
+    cli.main(["ingest", str(paper(tmp_path, "long.txt", long_text))])
+    document_id = cli_rag.documents()[0].id
+    capsys.readouterr()
+
+    assert cli.main(["search", "retrieval", "-k", "1", "-d", document_id]) == 0
+    assert "…" in capsys.readouterr().out
+
+    assert cli.main(["search", "retrieval", "-d", "unknown-id"]) == 0
+    assert "no document chunk matched" in capsys.readouterr().out
+
+    assert cli.main(["search", "retrieval", "-k", "0"]) == 0
+    assert "no document chunk matched" in capsys.readouterr().out
+    assert cli_rag.settings.chunk_size == RagSettings().chunk_size
+
+
+def test_search_prints_a_short_chunk_without_truncating(capsys, tmp_path, cli_rag):
+    """A chunk shorter than the snippet limit is printed whole, with no ellipsis."""
+    paper(tmp_path, "short.txt", "GraphRAG walks a knowledge graph.")
+
+    assert cli.main(["ingest", str(tmp_path / "short.txt")]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["search", "walks"]) == 0
+
+    out = capsys.readouterr().out
+    assert "GraphRAG walks a knowledge graph." in out
+    assert "…" not in out
+
+
+def test_search_explains_a_dead_vector_store(capsys, tmp_path, monkeypatch, isolated_env):
+    from fakes import BagOfWordsEmbedder, DictionaryVectorStore
+    from myagent.rag.pipeline import RagPipeline
+    from myagent.rag.vectorstore import VectorStoreError
+
+    alive = rag_pipeline(tmp_path)
+    import asyncio
+
+    asyncio.run(alive.ingest([paper(tmp_path)]))
+    dead = RagPipeline(
+        alive.store,
+        BagOfWordsEmbedder(),
+        DictionaryVectorStore(fail_with=VectorStoreError("Qdrant is down")),
+    )
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: dead)
+
+    assert cli.main(["search", "graph"]) == 1
+    assert "Qdrant is down" in capsys.readouterr().err
+
+
+def test_search_explains_a_missing_credential(capsys, tmp_path, monkeypatch, isolated_env):
+    from myagent.config.env import MissingEnvError
+
+    class NeedsKey:
+        dim = 16
+
+        async def embed(self, texts):
+            raise MissingEnvError("EMBED_API_KEY")
+
+    keyless = rag_pipeline(tmp_path, embedder=NeedsKey())
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: keyless)
+
+    # The retriever wraps every provider failure — a missing key included — into
+    # one readable EmbeddingError (the same rule the memory retriever follows).
+    assert cli.main(["search", "anything"]) == 1
+    assert "EMBED_API_KEY is not set" in capsys.readouterr().err
+
+
+def test_search_exits_two_when_the_query_path_needs_a_credential(
+    capsys, tmp_path, monkeypatch, isolated_env
+):
+    """The reranker is an injected stage; a key it cannot find is a config error."""
+    from myagent.config.env import MissingEnvError
+
+    class NeedsKey:
+        async def rerank(self, query, candidates, top_n):
+            raise MissingEnvError("RERANK_API_KEY")
+
+    pipeline = rag_pipeline(tmp_path, reranker=NeedsKey())
+    monkeypatch.setattr(cli, "build_rag", lambda *args, **kwargs: pipeline)
+
+    assert cli.main(["search", "anything"]) == 2
+
+    assert "RERANK_API_KEY is not set" in capsys.readouterr().err
+
+
+def test_docs_list_is_empty_before_anything_is_ingested(capsys, cli_rag):
+    assert cli.main(["docs", "list"]) == 0
+
+    assert "no documents yet" in capsys.readouterr().out
+
+
+def test_docs_list_and_delete_manage_the_knowledge_base(capsys, tmp_path, cli_rag):
+    path = paper(tmp_path, "scanned.pdf" if False else "graphrag.txt")
+    cli.main(["ingest", str(path)])
+    document_id = cli_rag.documents()[0].id
+    capsys.readouterr()
+
+    assert cli.main(["docs", "list"]) == 0
+    listed = capsys.readouterr().out
+    assert f"{document_id}     1 chunk(s)    1 page(s)" in listed
+    assert "(1 document(s), 1 chunk(s))" in listed
+
+    assert cli.main(["docs", "delete", document_id]) == 0
+    assert f"deleted {document_id} and its chunk vectors" in capsys.readouterr().out
+
+    assert cli.main(["docs", "delete", document_id]) == 1
+    assert "no document with id" in capsys.readouterr().err
+
+
+def test_docs_delete_explains_a_dead_vector_store(capsys, tmp_path, cli_rag):
+    from fakes import DictionaryVectorStore
+    from myagent.rag.vectorstore import VectorStoreError
+
+    cli.main(["ingest", str(paper(tmp_path))])
+    document_id = cli_rag.documents()[0].id
+    cli_rag._vectorstore = DictionaryVectorStore(fail_with=VectorStoreError("Qdrant is down"))
+    capsys.readouterr()
+
+    assert cli.main(["docs", "delete", document_id]) == 1
+    assert "Qdrant is down" in capsys.readouterr().err
+
+
+def test_the_rag_commands_need_a_verb_for_docs(capsys):
+    with pytest.raises(SystemExit) as info:
+        cli.main(["docs"])
+
+    assert info.value.code == 2
+    assert "the following arguments are required: docs_command" in capsys.readouterr().err

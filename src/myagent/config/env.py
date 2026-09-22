@@ -119,3 +119,36 @@ def get_bool_env(name: str, default: bool = False) -> bool:
     if text in _FALSE_VALUES:
         return False
     raise ValueError(f"{name} must be a boolean, got {value!r}")
+
+
+def remember_env(name: str, value: str) -> Path | None:
+    """Persist ``name=value`` into the ``.env`` in use, and into this process.
+
+    The one caller is the embedding-dimension probe (PLAN 5.4): the first ingest
+    discovers ``len(vector)`` from the provider and has to leave that number
+    behind, because the Qdrant collection it is about to create is built for one
+    dimension and every later run must agree with it.
+
+    The file is edited line by line — the first ``NAME=`` line is replaced, and
+    when there is none the assignment is appended — so comments, ordering and
+    every other variable survive untouched. Process environment variables are
+    updated too, so the current run sees the value without reloading the file.
+
+    Returns:
+        The file that was written, or ``None`` when no ``.env`` file is in use
+        (then only the process environment was updated).
+    """
+    os.environ[name] = value
+    path = discover_env_file()
+    if path is None:
+        return None
+    assignment = f"{name}={value}"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith(f"{name}="):
+            lines[index] = assignment
+            break
+    else:
+        lines.append(assignment)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path

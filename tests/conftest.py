@@ -7,11 +7,13 @@ Logging state is process-global, so every test that touches it runs through the
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from myagent.config.settings import ENV_EMBED_DIM
 from myagent.observability.logging import LOGGER_NAME, reset_logging
 
 
@@ -28,6 +30,25 @@ def isolated_env_file(tmp_path_factory, monkeypatch) -> Path:
     env_file.write_text("", encoding="utf-8")
     monkeypatch.setenv("MYAGENT_ENV_FILE", str(env_file))
     return env_file
+
+
+@pytest.fixture(autouse=True)
+def isolated_probed_dim() -> Iterator[None]:
+    """Keep the probed ``EMBED_DIM`` out of every other test.
+
+    ``remember_env()`` (``src/myagent/config/env.py``) writes straight into the
+    real ``os.environ`` so the current run sees the probed dimension without
+    reloading the file — a write ``monkeypatch`` never made and therefore cannot
+    undo. Without this fixture the dimension one ingest probes would still be set
+    when a later test reads its own ``.env``.
+    """
+    previous = os.environ.pop(ENV_EMBED_DIM, None)
+    try:
+        yield
+    finally:
+        os.environ.pop(ENV_EMBED_DIM, None)
+        if previous is not None:
+            os.environ[ENV_EMBED_DIM] = previous
 
 
 @pytest.fixture(autouse=True)

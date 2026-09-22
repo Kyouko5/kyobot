@@ -177,6 +177,81 @@ class DictionaryIndex:
             raise self.fail_with
 
 
+# --- Phase 5: RAG doubles ----------------------------------------------------
+
+
+class DictionaryVectorStore:
+    """An in-process ``BaseVectorStore``: the "Qdrant" of the offline RAG tests.
+
+    Payloads are stored per chunk id and candidates are scored with cosine
+    similarity against the stored vectors — which is what a Qdrant collection
+    with ``Distance.COSINE`` does — so a test can assert retrieval *order*
+    without a server. ``fail_with`` simulates a Qdrant that is down, which is how
+    the "Qdrant unreachable" paths are reached offline.
+    """
+
+    def __init__(self, *, fail_with: Exception | None = None) -> None:
+        self.points: dict[str, tuple[list[float], dict[str, Any]]] = {}
+        self.dims: list[int] = []
+        self.deleted: list[str] = []
+        self.fail_with = fail_with
+
+    def ensure_collection(self, dim: int) -> None:
+        self._check()
+        self.dims.append(dim)
+
+    def upsert(self, chunks, vectors) -> None:
+        self._check()
+        from myagent.rag.vectorstore import payload
+
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            self.points[chunk.id] = (list(vector), payload(chunk))
+
+    def search(self, vector, top_k: int, filters=None):
+        self._check()
+        from myagent.rag.types import ScoredPoint
+
+        wanted = (filters or {}).get("document_id")
+        if isinstance(wanted, str):
+            wanted = [wanted]
+        scored: list[ScoredPoint] = []
+        for chunk_id, (other, data) in self.points.items():
+            if wanted is not None and data["document_id"] not in wanted:
+                continue
+            scored.append(ScoredPoint(chunk_id, _cosine(list(vector), other), data))
+        scored.sort(key=lambda point: (-point.score, point.id))
+        return scored[:top_k]
+
+    def delete_document(self, document_id: str) -> None:
+        self._check()
+        self.deleted.append(document_id)
+        for chunk_id, (_, data) in list(self.points.items()):
+            if data["document_id"] == document_id:
+                del self.points[chunk_id]
+
+    def count(self) -> int:
+        self._check()
+        return len(self.points)
+
+    def _check(self) -> None:
+        if self.fail_with is not None:
+            raise self.fail_with
+
+
+class SilentEmbedder:
+    """An embedder that answers nothing: the "provider returned no vectors" case."""
+
+    def __init__(self, dim: int = 16) -> None:
+        self._dim = dim
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return []
+
+
 class NullMemory:
     """The ``MemoryProvider`` port with nothing behind it."""
 

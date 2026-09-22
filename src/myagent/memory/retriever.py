@@ -31,7 +31,6 @@ from collections.abc import Sequence
 
 from myagent.config.settings import MemorySettings
 from myagent.memory.base import BaseMemory
-from myagent.memory.embedder import EmbeddingError
 from myagent.memory.types import (
     EPISODIC,
     SEMANTIC,
@@ -43,7 +42,7 @@ from myagent.memory.types import (
 )
 from myagent.memory.vector_index import MemoryIndex, MemoryIndexError, VectorHit
 from myagent.observability.logging import get_logger
-from myagent.rag.embedder import BaseEmbedder
+from myagent.rag.embedder import BaseEmbedder, EmbeddingError
 
 __all__ = ["MemoryRetriever"]
 

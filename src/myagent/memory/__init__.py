@@ -16,7 +16,6 @@ is the only place where they are assembled, exactly like every other component.
 
 from myagent.memory.base import BaseMemory
 from myagent.memory.consolidator import ConsolidationResult, Consolidator
-from myagent.memory.embedder import EmbeddingError, OpenAICompatEmbedder
 from myagent.memory.episodic import EpisodicMemory
 from myagent.memory.extractor import MemoryExtractor, Turn
 from myagent.memory.manager import MemoryManager
@@ -39,6 +38,7 @@ from myagent.memory.vector_index import (
     VectorHit,
 )
 from myagent.memory.working import WorkingMemory
+from myagent.rag.embedder import EmbeddingError, OpenAICompatEmbedder
 
 __all__ = [
     "EPISODIC",

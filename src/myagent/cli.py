@@ -8,6 +8,10 @@
     myagent memory add "用户偏好 Python" --kind semantic --importance 0.8
     myagent memory consolidate --dry-run
     myagent memory forget <memory_id>
+    myagent ingest data/papers/*.pdf
+    myagent search "GraphRAG 的核心思想" -k 5
+    myagent docs list
+    myagent docs delete <document_id>
 
 Standard library ``argparse`` only: the framework keeps its runtime dependency
 list at one entry (``openai``, ADR-0006) and the CLI is thin enough not to need
@@ -21,14 +25,20 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from myagent.agent.loop import AgentLoop
 from myagent.config.env import MissingEnvError
-from myagent.config.settings import LLMSettings, Settings
+from myagent.config.settings import DEFAULT_RAG_TOP_K, LLMSettings, Settings
 from myagent.memory.manager import MemoryManager
 from myagent.memory.types import KINDS, Kind, MemoryRecord
 from myagent.observability.logging import configure_logging
-from myagent.runtime import build_agent, build_memory
+from myagent.rag.embedder import EmbeddingError
+from myagent.rag.loader import LoaderError
+from myagent.rag.pipeline import RagPipeline, citation
+from myagent.rag.types import RetrievedChunk
+from myagent.rag.vectorstore import VectorStoreError
+from myagent.runtime import build_agent, build_memory, build_rag
 from myagent.session.base import DEFAULT_SESSION_KEY
 
 __all__ = ["main"]
@@ -36,6 +46,7 @@ __all__ = ["main"]
 _PROMPT = "you> "
 _ANSWER_PREFIX = "agent> "
 _COMMANDS = ("/exit", "/quit", "/session", "/clear")
+_SNIPPET_CHARS = 200
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -48,6 +59,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _list_tools()
     if args.command == "memory":
         return _memory(args)
+    if args.command in ("ingest", "search", "docs"):
+        return _rag(args)
     return _chat(args)
 
 
@@ -66,6 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subcommands.add_parser("tools", help="list the registered tools")
     _add_memory_parser(subcommands)
+    _add_rag_parsers(subcommands)
     return parser
 
 
@@ -101,6 +115,123 @@ def _add_memory_parser(subcommands: argparse._SubParsersAction[argparse.Argument
 
     forget = verbs.add_parser("forget", help="delete one memory by id")
     forget.add_argument("memory_id", help="the id shown by 'memory list'")
+
+
+def _add_rag_parsers(subcommands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """``myagent ingest|search|docs``: the RAG commands of PLAN 5.8.
+
+    Two flat verbs (``ingest``, ``search``) and one noun with sub-verbs
+    (``docs list`` / ``docs delete``), mirroring ``myagent memory ...``.
+    """
+    ingest = subcommands.add_parser("ingest", help="ingest documents into the knowledge base")
+    ingest.add_argument("paths", nargs="+", help="files to ingest (.pdf / .md / .txt)")
+
+    search = subcommands.add_parser("search", help="search the ingested documents")
+    search.add_argument("query", help="what to look for")
+    search.add_argument(
+        "-k", "--top-k", type=int, default=DEFAULT_RAG_TOP_K, help="how many chunks to show"
+    )
+    search.add_argument(
+        "-d", "--document", action="append", help="restrict to one document id (repeatable)"
+    )
+
+    docs = subcommands.add_parser("docs", help="list or delete ingested documents")
+    verbs = docs.add_subparsers(dest="docs_command", required=True)
+    verbs.add_parser("list", help="show the ingested documents")
+    delete = verbs.add_parser("delete", help="forget one document and its vectors")
+    delete.add_argument("document_id", help="the id shown by 'docs list'")
+
+
+def _rag(args: argparse.Namespace) -> int:
+    """Dispatch the RAG commands; none of them need a chat model."""
+    pipeline = build_rag(Settings.from_env())
+    if args.command == "ingest":
+        return _rag_ingest(pipeline, args)
+    if args.command == "search":
+        return _rag_search(pipeline, args)
+    if args.docs_command == "list":
+        return _rag_docs_list(pipeline)
+    return _rag_docs_delete(pipeline, args)
+
+
+def _rag_ingest(pipeline: RagPipeline, args: argparse.Namespace) -> int:
+    """Load, chunk, embed and index every path; report one line per document."""
+    try:
+        report = asyncio.run(pipeline.ingest([Path(path) for path in args.paths]))
+    except MissingEnvError as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 2
+    except (LoaderError, EmbeddingError, VectorStoreError) as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 1
+    for document in report.documents:
+        action = "added" if document.created else "updated"
+        title = f"  {document.title}" if document.title else ""
+        print(f"{action} {document.document_id}  {document.chunks} chunk(s){title}")
+        print(f"    {document.source}")
+    if report.dim is not None:
+        probed = " (probed, written to .env)" if report.dim_probed else ""
+        print(f"embedding dim={report.dim}{probed}")
+    print(f"{report.added} added, {report.updated} updated, {report.chunk_count} chunk(s) total")
+    return 0
+
+
+def _rag_search(pipeline: RagPipeline, args: argparse.Namespace) -> int:
+    """Search the knowledge base, printing citations the user can follow up on."""
+    try:
+        hits = asyncio.run(
+            pipeline.retrieve(args.query, args.top_k, document_ids=args.document or None)
+        )
+    except MissingEnvError as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 2
+    except (EmbeddingError, VectorStoreError) as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 1
+    if not hits:
+        print(f"no document chunk matched {args.query!r}")
+        return 0
+    for hit in hits:
+        print(_hit_line(hit))
+    return 0
+
+
+def _rag_docs_list(pipeline: RagPipeline) -> int:
+    """List the knowledge base; reads SQLite only, so it works offline."""
+    documents = pipeline.documents()
+    if not documents:
+        print("no documents yet; ingest one with `myagent ingest <file>`")
+        return 0
+    for document in documents:
+        stamp = document.created_at.strftime("%Y-%m-%d %H:%M")
+        print(
+            f"{document.id}  {document.chunks:>4} chunk(s)  {document.pages:>3} page(s)  "
+            f"{stamp}  {document.source}"
+        )
+    print(f"({len(documents)} document(s), {sum(d.chunks for d in documents)} chunk(s))")
+    return 0
+
+
+def _rag_docs_delete(pipeline: RagPipeline, args: argparse.Namespace) -> int:
+    """Delete one document: its chunk rows and its vectors."""
+    try:
+        deleted = pipeline.delete(args.document_id)
+    except VectorStoreError as exc:
+        print(f"myagent: {exc}", file=sys.stderr)
+        return 1
+    if not deleted:
+        print(f"myagent: no document with id {args.document_id}", file=sys.stderr)
+        return 1
+    print(f"deleted {args.document_id} and its chunk vectors")
+    return 0
+
+
+def _hit_line(hit: RetrievedChunk) -> str:
+    """One retrieved chunk: its ``[document#index]`` citation, score and snippet."""
+    snippet = " ".join(hit.chunk.text.split())
+    if len(snippet) > _SNIPPET_CHARS:
+        snippet = snippet[:_SNIPPET_CHARS] + "…"
+    return f"{citation(hit)}  score={hit.score:.3f}\n    {snippet}"
 
 
 def _memory(args: argparse.Namespace) -> int:

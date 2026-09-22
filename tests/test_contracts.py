@@ -490,3 +490,33 @@ def test_the_assembly_point_is_where_the_concrete_pieces_meet():
     runtime = pytest.importorskip("myagent.runtime")
 
     assert _imports(runtime) >= _CONCRETE_IMPLEMENTATIONS_OF_THE_CORE
+
+
+# --------------------------------------------------------------------------
+# Phase 5: the three new injection points accept ducks too
+# --------------------------------------------------------------------------
+
+
+def test_the_phase_5_rag_protocols_accept_duck_typed_objects():
+    from myagent.rag.chunker import BaseChunker
+    from myagent.rag.loader import BaseLoader
+    from myagent.rag.reranker import BaseReranker
+
+    class DuckLoader:
+        def supports(self, path: Path) -> bool:
+            return True
+
+        def load(self, path: Path) -> Document:
+            return Document(id="duck", source=str(path), text="quack")
+
+    class DuckChunker:
+        def split(self, document: Document) -> list[Chunk]:
+            return [Chunk(id=f"{document.id}:0", document_id=document.id, index=0, text="quack")]
+
+    class DuckReranker:
+        async def rerank(self, query: str, candidates: list[RetrievedChunk], top_n: int):
+            return candidates[:top_n]
+
+    assert isinstance(DuckLoader(), BaseLoader)
+    assert isinstance(DuckChunker(), BaseChunker)
+    assert isinstance(DuckReranker(), BaseReranker)
