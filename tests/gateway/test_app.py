@@ -51,8 +51,8 @@ def test_bootstrap_describes_the_model_for_the_badge(tmp_path):
         "chat": True,
         "config": True,
         "sessions": True,
-        "memory": True,
-        "rag": True,
+        "memory": False,
+        "rag": False,
     }
     assert payload["limits"] == {"max_message_chars": MAX_MESSAGE_CHARS}
     assert payload["endpoints"]["chat"] == "/api/chat"
@@ -276,6 +276,52 @@ def test_update_config_refuses_a_bad_edit_without_writing_it(tmp_path, isolated_
 
     assert error.value.status == 400
     assert app.agent is agent_before
+    assert isolated_env_file.read_text(encoding="utf-8") == ""
+
+
+def test_optional_settings_save_and_reload_without_leaking_keys(
+    tmp_path, isolated_env_file, monkeypatch
+):
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    app = build_app(tmp_path)
+    try:
+        payload = app.update_config(
+            {
+                "memory_enabled": True,
+                "rag_enabled": True,
+                "embedding_model_type": "openai",
+                "embedding_model_name": "text-embedding-3-small",
+                "embedding_api_key": "sk-embedding-secret-1234",
+                "embedding_base_url": "https://embed.example.test/v1",
+                "qdrant_url": "https://qdrant.example.test",
+                "qdrant_api_key": "qdrant-secret-1234",
+            }
+        )
+        bootstrap = app.bootstrap()
+    finally:
+        app.close()
+
+    saved = isolated_env_file.read_text(encoding="utf-8")
+    assert "MYAGENT_MEMORY_ENABLED=true" in saved
+    assert "MYAGENT_RAG_ENABLED=true" in saved
+    assert "EMBED_MODEL_NAME=text-embedding-3-small" in saved
+    assert "MYAGENT_QDRANT_URL=https://qdrant.example.test" in saved
+    assert bootstrap["features"]["memory"] is True
+    assert bootstrap["features"]["rag"] is True
+    assert payload["embedding_api_key_set"] is True
+    assert payload["qdrant_api_key_set"] is True
+    assert "sk-embedding-secret-1234" not in repr(payload)
+    assert "qdrant-secret-1234" not in repr(payload)
+
+
+def test_invalid_optional_setting_does_not_write_llm_edit(tmp_path, isolated_env_file):
+    app = build_app(tmp_path)
+    try:
+        with pytest.raises(GatewayError):
+            app.update_config({"model": "changed", "qdrant_url": "bad-url"})
+    finally:
+        app.close()
+
     assert isolated_env_file.read_text(encoding="utf-8") == ""
 
 

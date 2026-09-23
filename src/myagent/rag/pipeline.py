@@ -47,7 +47,7 @@ from myagent.rag.reranker import BaseReranker, IdentityReranker
 from myagent.rag.retriever import VectorRetriever
 from myagent.rag.store import SQLiteDocumentStore, StoredDocument
 from myagent.rag.types import Chunk, Document, RetrievedChunk
-from myagent.rag.vectorstore import BaseVectorStore
+from myagent.rag.vectorstore import BaseVectorStore, VectorStoreError
 
 __all__ = [
     "IngestReport",
@@ -257,7 +257,11 @@ class RagPipeline:
         if not self._settings.enabled:
             logger.debug("rag is disabled (MYAGENT_RAG_ENABLED); recall returns nothing")
             return []
-        hits = await self.retrieve(query, top_k)
+        try:
+            hits = await self.retrieve(query, top_k)
+        except (EmbeddingError, VectorStoreError) as exc:
+            logger.warning("automatic RAG recall skipped: %s", exc)
+            return []
         return [
             ContextItem(
                 text=hit.chunk.text.strip(),

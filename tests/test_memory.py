@@ -90,7 +90,7 @@ def sessions(tmp_path: Path) -> JsonlSessionStore:
 
 @pytest.fixture
 def settings() -> MemorySettings:
-    return MemorySettings()
+    return MemorySettings(enabled=True)
 
 
 def make_manager(
@@ -110,7 +110,7 @@ def make_manager(
         embedding_model="fake-embed",
         sessions=sessions,
         model=model,
-        settings=settings,
+        settings=settings if settings is not None else MemorySettings(enabled=True),
     )
 
 

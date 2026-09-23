@@ -405,6 +405,7 @@ def test_memory_defaults_need_no_configuration():
     memory = MemorySettings.from_env()
 
     assert memory.enabled is DEFAULT_MEMORY_ENABLED
+    assert memory.enabled is False
     assert memory.half_life_days == DEFAULT_MEMORY_HALF_LIFE_DAYS
     assert memory.top_k == DEFAULT_MEMORY_TOP_K
     assert memory.max_text_chars == DEFAULT_MEMORY_MAX_TEXT_CHARS
@@ -487,6 +488,7 @@ def test_rag_defaults_are_the_adr_0009_values():
     rag = RagSettings.from_env()
 
     assert rag == RagSettings()
+    assert rag.enabled is False
     assert (
         (rag.chunk_size, rag.chunk_overlap, rag.top_k)
         == (

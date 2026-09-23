@@ -50,7 +50,7 @@
 
     <dialog class="dialog" id="config-dialog">
       <form method="dialog" class="dialog-body" id="config-form">
-        <h2>API 配置</h2>
+        <h2>模型与可选能力</h2>
         <p class="hint">
           保存后写入 <code>.env</code> 并立即重建 agent（与 <code>myagent chat</code> 共用同一份配置）。
         </p>
@@ -85,6 +85,40 @@
             <input id="cfg-temperature" type="number" min="0" step="0.1" />
           </label>
         </div>
+        <fieldset class="optional-settings">
+          <legend>Memory / RAG（默认关闭）</legend>
+          <p class="hint">启用前请配置 Embedding 与 Qdrant。Qdrant 本地部署无需 API Key。</p>
+          <label class="toggle"><input id="cfg-memory-enabled" type="checkbox" />启用 Memory 自动召回与写入</label>
+          <label class="toggle"><input id="cfg-rag-enabled" type="checkbox" />启用 RAG 自动召回</label>
+          <label>
+            <span>Embedding 类型</span>
+            <select id="cfg-embedding-model-type"></select>
+          </label>
+          <label>
+            <span>Embedding 模型（<code>EMBED_MODEL_NAME</code>）</span>
+            <input id="cfg-embedding-model-name" type="text" autocomplete="off" />
+          </label>
+          <label>
+            <span>Embedding Base URL（留空用类型默认端点）</span>
+            <input id="cfg-embedding-base-url" type="text" autocomplete="off" placeholder="https://…/v1" />
+          </label>
+          <label>
+            <span>Embedding API Key</span>
+            <input id="cfg-embedding-api-key" type="password" autocomplete="off" />
+            <small class="hint" id="cfg-embedding-api-key-hint"></small>
+          </label>
+          <label class="toggle"><input id="cfg-embedding-api-key-clear" type="checkbox" />清除已保存的 Embedding Key</label>
+          <label>
+            <span>Qdrant URL</span>
+            <input id="cfg-qdrant-url" type="url" autocomplete="off" placeholder="http://localhost:6333" />
+          </label>
+          <label>
+            <span>Qdrant API Key（本地部署可留空）</span>
+            <input id="cfg-qdrant-api-key" type="password" autocomplete="off" />
+            <small class="hint" id="cfg-qdrant-api-key-hint"></small>
+          </label>
+          <label class="toggle"><input id="cfg-qdrant-api-key-clear" type="checkbox" />清除已保存的 Qdrant Key</label>
+        </fieldset>
         <div class="status" id="cfg-status"></div>
         <div class="dialog-actions">
           <button class="ghost" id="cfg-test" type="button">测试连接</button>

@@ -31,7 +31,7 @@ scripts/check.sh                  # 质量门
 
 ```bash
 cp .env.example .env        # 首次：复制模板（.env 已被 git 忽略）
-# 填入 LLM / Embedding / Qdrant 的 key，然后：
+# 基础对话只需填写 LLM；启用 Memory / RAG 时再填写 Embedding 与 Qdrant，然后：
 MYAGENT_ENV_FILE=/absolute/path/to/.env python -m myagent.cli   # 可选：指定别的 .env
 ```
 
@@ -52,7 +52,8 @@ api_key = require_env("MYAGENT_LLM_API_KEY")  # 未填则抛 MissingEnvError
 | `EMBED_MODEL_TYPE` / `EMBED_MODEL_NAME` | Embedding 提供方与模型（Phase 5，ADR-0005） | `dashscope` / `qwen3.7-text-embedding-flash` |
 | `EMBED_API_KEY` / `EMBED_BASE_URL` / `EMBED_DIM` | Embedding 凭据、端点（留空=提供方默认）、维度（留空=服务决定） | 空 / 空 / 空 |
 | `MYAGENT_SQLITE_PATH` | 文档与元数据库文件（ADR-0003） | `data/myagent.db` |
-| `MYAGENT_QDRANT_URL` / `_API_KEY` / `_COLLECTION` / `_PREFER_GRPC` | 向量库连接（ADR-0003） | `http://localhost:6333` / 空 / `myagent_documents` / `false` |
+| `MYAGENT_QDRANT_URL` / `_API_KEY` / `_COLLECTION` / `_PREFER_GRPC` | 可选向量库连接（ADR-0003） | `http://localhost:6333` / 空 / `myagent_documents` / `false` |
+| `MYAGENT_MEMORY_ENABLED` / `MYAGENT_RAG_ENABLED` | 可选自动记忆与文档召回 | `false` / `false` |
 | `COHERE_API_KEY`、`TAVILY_API_KEY` | 可选：Reranker（Phase 5.7）、Web 工具（Phase 7） | 无 |
 
 约定：

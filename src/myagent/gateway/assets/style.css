@@ -323,6 +323,8 @@ button.block {
 
 .dialog {
   width: min(620px, 92vw);
+  max-height: 92vh;
+  overflow-y: auto;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -370,6 +372,24 @@ button.block {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+
+.optional-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.optional-settings legend {
+  padding: 0 5px;
+}
+
+.dialog-body .toggle {
+  flex-direction: row;
+  align-items: center;
 }
 
 .status {

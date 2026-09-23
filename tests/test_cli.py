@@ -218,7 +218,7 @@ def memory_manager(tmp_path):
         collection="myagent_memories",
         embedding_model="fake-embed",
         sessions=JsonlSessionStore(tmp_path / "sessions"),
-        settings=MemorySettings(),
+        settings=MemorySettings(enabled=True),
     )
 
 

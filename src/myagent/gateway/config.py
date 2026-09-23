@@ -19,10 +19,15 @@ updated.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Final
 
 from myagent.config.env import remember_env
 from myagent.config.settings import (
+    ENV_EMBED_API_KEY,
+    ENV_EMBED_BASE_URL,
+    ENV_EMBED_MODEL_NAME,
+    ENV_EMBED_MODEL_TYPE,
     ENV_LLM_API_KEY,
     ENV_LLM_BASE_URL,
     ENV_LLM_CONTEXT_WINDOW,
@@ -30,8 +35,14 @@ from myagent.config.settings import (
     ENV_LLM_MODEL,
     ENV_LLM_PROVIDER,
     ENV_LLM_TEMPERATURE,
+    ENV_MEMORY_ENABLED,
+    ENV_QDRANT_API_KEY,
+    ENV_QDRANT_URL,
+    ENV_RAG_ENABLED,
+    SUPPORTED_EMBED_MODEL_TYPES,
     SUPPORTED_LLM_PROVIDERS,
     LLMSettings,
+    Settings,
 )
 from myagent.gateway.errors import GatewayError
 
@@ -46,6 +57,17 @@ _EDITED_FIELDS: Final = (
     "max_tokens",
     "context_window",
     "temperature",
+)
+
+_CAPABILITY_FIELDS: Final = (
+    "memory_enabled",
+    "rag_enabled",
+    "embedding_model_type",
+    "embedding_model_name",
+    "embedding_api_key",
+    "embedding_base_url",
+    "qdrant_url",
+    "qdrant_api_key",
 )
 
 _SHORTEST_MASKABLE_KEY: Final = 12
@@ -81,6 +103,84 @@ def config_payload(settings: LLMSettings) -> dict[str, Any]:
         "api_key_hint": mask_api_key(settings.api_key),
         "missing": missing,
     }
+
+
+def capability_payload(settings: Settings) -> dict[str, Any]:
+    """Expose optional settings while keeping embedding and Qdrant keys masked."""
+    embedding = settings.embedding
+    qdrant = settings.qdrant
+    return {
+        "memory_enabled": settings.memory.enabled,
+        "rag_enabled": settings.rag.enabled,
+        "embedding_model_types": list(SUPPORTED_EMBED_MODEL_TYPES),
+        "embedding_model_type": embedding.model_type,
+        "embedding_model_name": embedding.model_name,
+        "embedding_base_url": embedding.base_url,
+        "embedding_api_key_set": bool(embedding.api_key),
+        "embedding_api_key_hint": mask_api_key(embedding.api_key),
+        "qdrant_url": qdrant.url,
+        "qdrant_api_key_set": bool(qdrant.api_key),
+        "qdrant_api_key_hint": mask_api_key(qdrant.api_key),
+    }
+
+
+def split_config(payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reject unknown browser fields before either settings bundle is written."""
+    unknown = sorted(set(payload) - set(_EDITED_FIELDS) - set(_CAPABILITY_FIELDS))
+    if unknown:
+        raise GatewayError(400, f"unknown config field(s): {', '.join(unknown)}")
+    return (
+        {key: value for key, value in payload.items() if key in _EDITED_FIELDS},
+        {key: value for key, value in payload.items() if key in _CAPABILITY_FIELDS},
+    )
+
+
+def merge_capabilities(current: Settings, payload: Mapping[str, Any]) -> dict[str, str]:
+    """Validate optional feature edits and return only the assignments submitted."""
+    try:
+        memory = replace(
+            current.memory,
+            enabled=_boolean(payload, "memory_enabled", current.memory.enabled),
+        )
+        rag = replace(current.rag, enabled=_boolean(payload, "rag_enabled", current.rag.enabled))
+        embedding = replace(
+            current.embedding,
+            model_type=_required_text(
+                payload, "embedding_model_type", current.embedding.model_type
+            ),
+            model_name=_required_text(
+                payload, "embedding_model_name", current.embedding.model_name
+            ),
+            api_key=_optional_text(payload, "embedding_api_key", current.embedding.api_key),
+            base_url=_optional_text(payload, "embedding_base_url", current.embedding.base_url),
+        )
+        qdrant = replace(
+            current.qdrant,
+            url=_required_text(payload, "qdrant_url", current.qdrant.url),
+            api_key=_optional_text(payload, "qdrant_api_key", current.qdrant.api_key),
+        )
+    except ValueError as exc:
+        raise GatewayError(400, str(exc)) from exc
+    values = {
+        "memory_enabled": (ENV_MEMORY_ENABLED, str(memory.enabled).lower()),
+        "rag_enabled": (ENV_RAG_ENABLED, str(rag.enabled).lower()),
+        "embedding_model_type": (ENV_EMBED_MODEL_TYPE, embedding.model_type),
+        "embedding_model_name": (ENV_EMBED_MODEL_NAME, embedding.model_name),
+        "embedding_api_key": (ENV_EMBED_API_KEY, embedding.api_key or ""),
+        "embedding_base_url": (ENV_EMBED_BASE_URL, embedding.base_url or ""),
+        "qdrant_url": (ENV_QDRANT_URL, qdrant.url),
+        "qdrant_api_key": (ENV_QDRANT_API_KEY, qdrant.api_key or ""),
+    }
+    return {values[key][0]: values[key][1] for key in payload}
+
+
+def _boolean(payload: Mapping[str, Any], field: str, current: bool) -> bool:
+    if field not in payload:
+        return current
+    value = payload[field]
+    if not isinstance(value, bool):
+        raise GatewayError(400, f"{field} must be a boolean")
+    return value
 
 
 def merge_config(

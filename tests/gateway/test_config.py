@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from gateway_helpers import settings_for
 from myagent.config.settings import (
     ENV_LLM_API_KEY,
     ENV_LLM_BASE_URL,
@@ -14,7 +15,15 @@ from myagent.config.settings import (
     ENV_LLM_TEMPERATURE,
     LLMSettings,
 )
-from myagent.gateway.config import apply_config, config_payload, mask_api_key, merge_config
+from myagent.gateway.config import (
+    apply_config,
+    capability_payload,
+    config_payload,
+    mask_api_key,
+    merge_capabilities,
+    merge_config,
+    split_config,
+)
 from myagent.gateway.errors import GatewayError
 
 
@@ -197,3 +206,51 @@ def test_a_rejected_configuration_is_not_written(isolated_env_file):
 
     assert "LLM_MODEL" not in isolated_env_file.read_text(encoding="utf-8")
     assert os.environ.get(ENV_LLM_MODEL) is None
+
+
+def test_optional_settings_are_masked_and_off_by_default(tmp_path):
+    payload = capability_payload(settings_for(tmp_path))
+
+    assert payload["memory_enabled"] is False
+    assert payload["rag_enabled"] is False
+    assert payload["qdrant_url"] == "http://localhost:6333"
+    assert payload["embedding_model_types"] == ["dashscope", "openai"]
+    assert payload["embedding_api_key_set"] is False
+    assert payload["qdrant_api_key_set"] is False
+
+
+def test_optional_settings_validate_types_and_urls_before_writing(tmp_path):
+    current = settings_for(tmp_path)
+    for payload in (
+        {"memory_enabled": "true"},
+        {"rag_enabled": 1},
+        {"embedding_model_type": "unknown"},
+        {"embedding_model_name": ""},
+        {"embedding_base_url": "ftp://example.test"},
+        {"qdrant_url": "localhost:6333"},
+        {"qdrant_api_key": []},
+    ):
+        with pytest.raises(GatewayError) as error:
+            merge_capabilities(current, payload)
+        assert error.value.status == 400
+
+
+def test_optional_settings_accept_local_qdrant_without_a_key(tmp_path):
+    llm, optional = split_config({"model": "m", "memory_enabled": True, "rag_enabled": True})
+    writes = merge_capabilities(settings_for(tmp_path), optional)
+
+    assert llm == {"model": "m"}
+    assert writes == {"MYAGENT_MEMORY_ENABLED": "true", "MYAGENT_RAG_ENABLED": "true"}
+
+
+def test_optional_keys_can_be_cleared_for_local_use(tmp_path):
+    writes = merge_capabilities(
+        settings_for(tmp_path), {"embedding_api_key": "", "qdrant_api_key": ""}
+    )
+
+    assert writes == {"EMBED_API_KEY": "", "MYAGENT_QDRANT_API_KEY": ""}
+
+
+def test_unknown_optional_field_is_rejected():
+    with pytest.raises(GatewayError, match="unknown config field"):
+        split_config({"qdrant_password": "secret"})

@@ -287,7 +287,7 @@ async def test_a_dead_vector_store_is_reported(tmp_path, store, embedder):
 async def test_recall_returns_citable_context_items(tmp_path, store, embedder, vectorstore):
     """``recall`` is ``retrieve`` with a citation instead of the whole chunk record."""
     await build(store, embedder, vectorstore).ingest([write(tmp_path, "graphrag.txt", TEXT)])
-    held = build(store, embedder, vectorstore, settings=RagSettings(top_k=1))
+    held = build(store, embedder, vectorstore, settings=RagSettings(enabled=True, top_k=1))
 
     items = await held.recall("knowledge graph retrieval")
     hits = await held.retrieve("knowledge graph retrieval", top_k=1)
@@ -308,6 +308,29 @@ async def test_recall_answers_nothing_when_rag_is_disabled(tmp_path, store, embe
     assert await held.recall("the graph") == []
     # The switch is narrower than that: ``myagent search`` keeps its documents.
     assert await held.retrieve("the graph")
+
+
+@pytest.mark.parametrize(
+    "failure", [EmbeddingError("embedding down"), VectorStoreError("qdrant down")]
+)
+async def test_automatic_recall_degrades_but_explicit_retrieve_reports_failure(
+    store, embedder, vectorstore, failure, caplog
+):
+    if isinstance(failure, EmbeddingError):
+
+        class FailingEmbedder:
+            async def embed(self, texts):
+                raise failure
+
+        embedder = FailingEmbedder()
+    else:
+        vectorstore = DictionaryVectorStore(fail_with=failure)
+    held = build(store, embedder, vectorstore, settings=RagSettings(enabled=True))
+
+    assert await held.recall("query") == []
+    assert "automatic RAG recall skipped" in caplog.text
+    with pytest.raises(type(failure), match="down"):
+        await held.retrieve("query")
 
 
 def test_build_context_renders_one_citable_block_per_chunk():

@@ -24,6 +24,7 @@
 | Phase 5 | RAG 系统建设：Loader → Chunker → Embedding → Store → Retriever | ✅ 已完成 |
 | Phase 6 | Context Manager 重构：优先级与预算 | ✅ 已完成 |
 | Phase G | 浏览器 UI + 本地 Gateway（`myagent web`） | ✅ 已完成 |
+| Phase O | 基础模式与可选 Memory / RAG（含网页设置） | ✅ 已完成 |
 | Phase 7 | 垂直领域 Agent | ⬜ 未开始 |
 | Phase 8 | Evaluation Pipeline | ⬜ 未开始 |
 | Phase 9 | 工程化：测试、Logging、Docker | ⬜ 未开始 |
@@ -34,7 +35,7 @@
 ## 快速开始
 
 ```bash
-# 1. 配置密钥（.env 已被 git 忽略；模板列出了全部需要的 key）
+# 1. 复制模板，只填写 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 cp .env.example .env
 
 # 2. 创建虚拟环境并安装依赖（本机 Python 缺少 CA 证书包，脚本会处理）
@@ -49,24 +50,33 @@ scripts/check.sh
 myagent chat -m "现在几点？顺便用 calculator 算一下 (12+8)*3"
 myagent chat                 # 交互模式：/exit 退出、/session 看会话 key、/clear 清空历史
 myagent tools                # 列出已注册工具（离线可用，不需要密钥）
-myagent memory list          # 看长期记忆（Phase 4；需要 Qdrant，见下方说明）
-myagent memory search "我的研究方向"
-
-# 5. 知识库（Phase 5）：摄取 → 检索 → 带引用的答案
-myagent ingest docs/*.md                    # 摄取（幂等；首次自动探测 EMBED_DIM 并写回 .env）
-myagent search "切分参数怎么定" -k 5         # 检索，输出 [文档id#块号] 引用
-myagent docs list                           # 知识库里有哪些文档
-myagent docs delete <document_id>           # 删一篇（向量 + 行一起删）
-
-# 6. 上下文预算与压缩（Phase 6）
+# 5. 上下文预算与压缩（Phase 6）
 myagent chat --show-context -m "现在几点？"   # 打印七个 section 的 budget/used/dropped，再给答案
 myagent session compact cli:default          # 把旧轮换成一个摘要检查点（--keep-recent 控制保留几轮）
 
-# 7. 浏览器 UI（Phase G）：同一份 .env、同一个 agent、同一个 data/sessions/
+# 6. 浏览器 UI（Phase G）：同一份 .env、同一个 agent、同一个 data/sessions/
 myagent web                  # 起本地 gateway 并打开 http://127.0.0.1:8080
 myagent web --port 9000 --no-open   # 换端口 / 不自动开浏览器
 myagent web --allow-remote   # 允许别的机器访问（无认证，会打印警告）
 ```
+
+**基础模式只需要 LLM。** Memory 与 RAG 默认关闭；`myagent chat` 和 `myagent web` 无需
+Embedding Key，也无需运行 Qdrant。网页左下角「API 配置」可填写以下可选能力配置并分别启用
+Memory 和 RAG，保存后立即重建 Agent。
+
+```env
+MYAGENT_MEMORY_ENABLED=true
+MYAGENT_RAG_ENABLED=true
+EMBED_MODEL_TYPE=dashscope
+EMBED_MODEL_NAME=qwen3.7-text-embedding-flash
+EMBED_API_KEY=...
+MYAGENT_QDRANT_URL=http://localhost:6333
+```
+
+本地 Qdrant 不需要 API Key；Qdrant Cloud 可另填 `MYAGENT_QDRANT_API_KEY`。显式知识库
+操作仍可使用 `myagent ingest docs/*.md`、`myagent search "查询" -k 5`、`myagent docs list`
+与 `myagent docs delete <document_id>`；`MYAGENT_RAG_ENABLED` 控制的是对话中的自动召回。
+记忆可用 `myagent memory list` 和 `myagent memory search "查询"` 检查。
 
 Phase 3 之后的 Framework V2 可以独立运行，且**模块可替换、依赖可注入**：契约用 `Protocol`
 定义、装配集中在 `myagent.runtime.build_agent()` 一处。把只读参照 `nanobot/` 删掉，上面的命令
@@ -75,16 +85,17 @@ Phase 2 的独立运行证据在 [`docs/records/phase-2-migration.md`](./docs/re
 对话会以 JSONL 追加写入 `data/sessions/`（已 git 忽略），工具读写的沙箱目录默认是 `workspace/`
 （其中的 `project-notes.md` 是给 `read_file` / `search_local` 用的示例语料）。
 
-Phase 4 的**分层记忆**已接进 Loop：记录存 SQLite（`data/myagent.db`），向量存 Qdrant 的独立
-collection（`myagent_memories`），`myagent chat` 每轮自动召回 + 自动写入（有策略，不是"全都记"）。
-Qdrant 连不上时不会中断对话：召回降级为关键词搜索并给出提示。关闭开关用
-`MYAGENT_MEMORY_ENABLED=false`。细节见 [`docs/memory-design.md`](./docs/memory-design.md)
+Phase 4 的**分层记忆**已接进 Loop：启用后记录存 SQLite（`data/myagent.db`），向量存 Qdrant 的独立
+collection（`myagent_memories`），对话每轮自动召回与写入（有策略，不是"全都记"）。
+Qdrant 连不上时不会中断对话：召回降级为关键词搜索并给出提示。细节见 [`docs/memory-design.md`](./docs/memory-design.md)
 与实验表 [`docs/records/phase-4-memory.md`](./docs/records/phase-4-memory.md)。
 
 Phase 5 的 **RAG 流水线**是一条独立于对话的命令行能力（上游 nanobot 没有这一块）：
 文件经 Loader → Chunker → Embedder 进入 Qdrant 的 `myagent_documents` collection，
 原文与块号存 SQLite；`myagent search` 检索后给每个块附上 `[文档id#块号]` 引用，
 `RagPipeline.build_context()` 把命中块拼成模型可以直接引用的上下文。
+对话中的自动 RAG 召回默认关闭；启用后如 Embedding 或 Qdrant 故障，本轮跳过 RAG 上下文，
+显式 `myagent search` 仍报告错误。
 默认切分 800 字符 / 重叠 120 字符（400/800/1200 的实验见 ADR-0009）；
 `EMBED_DIM` 留空时首次 ingest 会用一次真实调用探测维度并写回 `.env`。
 细节见 [`docs/rag-design.md`](./docs/rag-design.md)
@@ -148,9 +159,9 @@ kyobot/
 │   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding / Memory / RAG）
 │   ├── observability/          # 日志等可观测性基础件
 │   ├── tokens.py               # 全框架共用的 token 估算
-│   ├── gateway/                # 本地 Gateway + 浏览器 UI（Phase G）：server / app / config / runner / assets.py / errors.py + assets/（HTML/CSS/JS，零构建）
+│   ├── gateway/                # 本地 Gateway + 浏览器 UI（Phase G/O）：server / app / config / runner / assets.py / errors.py + assets/（HTML/CSS/JS，零构建）
 │   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs|session|web（只调用 build_*）
-├── tests/                      # pytest 测试（799 项，覆盖率 100%；tests/rag/ 与 tests/gateway/ 全部离线，只有 test_server.py 绑 loopback）
+├── tests/                      # pytest 测试（809 项，覆盖率 100%；仅 gateway/test_server.py 绑 loopback）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
 │   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
@@ -165,7 +176,7 @@ kyobot/
 │   ├── gateway-design.md       # 本地 Gateway 与浏览器 UI：请求路径 / 路由 / 安全边界 / 与上游对照（Phase G）
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
-│   └── records/                # 阶段工作记录
+│   └── records/                # 阶段工作记录（含 phase-o-optional-capabilities.md）
 ├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py / rag_experiment.py / context_experiment.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 ├── data/                       # 本地运行状态：会话 JSONL + 记忆 SQLite（git 忽略）
@@ -229,9 +240,10 @@ kyobot/
 - [`docs/gateway-design.md`](./docs/gateway-design.md)：一条请求的完整路径、9 条路由、代码布局、安全边界、前端三件套的取舍，以及与上游 nanobot webui 的对照表。
 - [`docs/decision-records/0011-local-gateway-and-webui.md`](./docs/decision-records/0011-local-gateway-and-webui.md)：为什么用标准库而不是 FastAPI/aiohttp、为什么不用 WebSocket、为什么前端零构建、loopback-only 与无认证的边界、`ChatRunner` 为什么必须存在。
 - [`docs/records/phase-g-gateway-webui.md`](./docs/records/phase-g-gateway-webui.md)：Phase G 工作记录（真实服务 transcript、无头 UI 冒烟、安全负例、质量门，以及五个实现中发现的真实问题）。
+- [`docs/records/phase-o-optional-capabilities.md`](./docs/records/phase-o-optional-capabilities.md)：Phase O 工作记录（默认关闭、运行时降级、网页配置与离线验收）。
 
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
-> （覆盖 `docs/`、`README.md` 与 `PLAN.md`，当前 1332 个锚点全部解析通过），避免文档与源码脱节。
+> （覆盖 `docs/`、`README.md` 与 `PLAN.md`），避免文档与源码脱节。
 
 **工程与决策**
 

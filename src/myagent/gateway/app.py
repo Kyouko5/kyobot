@@ -26,9 +26,15 @@ from typing import Any, Final
 from myagent import __version__
 from myagent.agent.loop import AgentLoop, TurnContext
 from myagent.agent.types import Message, StopReason
-from myagent.config.env import MissingEnvError
+from myagent.config.env import MissingEnvError, remember_env
 from myagent.config.settings import LLMSettings, Settings
-from myagent.gateway.config import apply_config, config_payload, merge_config
+from myagent.gateway.config import (
+    capability_payload,
+    config_payload,
+    merge_capabilities,
+    merge_config,
+    split_config,
+)
 from myagent.gateway.errors import GatewayError
 from myagent.gateway.runner import ChatRunner
 from myagent.models.base import BaseModel, LLMError
@@ -120,7 +126,7 @@ class GatewayApp:
 
     def config(self) -> dict[str, Any]:
         """The masked LLM configuration the settings dialog renders."""
-        return config_payload(self._settings.llm)
+        return {**config_payload(self._settings.llm), **capability_payload(self._settings)}
 
     def update_config(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Persist an API-configuration edit, then rebuild the agent around it.
@@ -130,7 +136,11 @@ class GatewayApp:
         token counter and its context budget were all derived from them).
         """
         logger.info("gateway: applying a configuration change from the browser")
-        apply_config(self._settings.llm, payload)
+        llm_payload, optional_payload = split_config(payload)
+        _, llm_writes = merge_config(self._settings.llm, llm_payload)
+        optional_writes = merge_capabilities(self._settings, optional_payload)
+        for name, value in {**llm_writes, **optional_writes}.items():
+            remember_env(name, value)
         self.reload()
         return self.config()
 
@@ -140,7 +150,9 @@ class GatewayApp:
         Returns ``{"ok": True, ...}`` or ``{"ok": False, "error": ...}`` with a
         200: a refused key is a *result* of the check, not a broken request.
         """
-        candidate, _ = merge_config(self._settings.llm, payload)
+        llm_payload, optional_payload = split_config(payload)
+        candidate, _ = merge_config(self._settings.llm, llm_payload)
+        merge_capabilities(self._settings, optional_payload)
         try:
             reply = self._runner.call(lambda: _ping(self._model_factory(candidate)))
         except (MissingEnvError, LLMError) as exc:

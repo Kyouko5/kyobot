@@ -79,7 +79,7 @@ function renderEmptyState() {
   const list = document.createElement("ul");
   for (const line of [
     "工具：读文件、搜索、计算都可用，回答里会标出用了哪些工具",
-    "记忆与 RAG：与 myagent chat 共用同一份长期记忆和知识库",
+    "记忆与 RAG：默认关闭，可在左下角设置中启用",
     "上下文：每轮回答下会给出本轮 section 用量与预算",
   ]) {
     const item = document.createElement("li");
@@ -274,6 +274,32 @@ function fillConfigForm(config) {
   el("cfg-max-tokens").value = config.max_tokens;
   el("cfg-context-window").value = config.context_window;
   el("cfg-temperature").value = config.temperature;
+  el("cfg-memory-enabled").checked = config.memory_enabled;
+  el("cfg-rag-enabled").checked = config.rag_enabled;
+  const embeddingType = el("cfg-embedding-model-type");
+  embeddingType.replaceChildren();
+  for (const name of config.embedding_model_types) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    embeddingType.appendChild(option);
+  }
+  embeddingType.value = config.embedding_model_type;
+  el("cfg-embedding-model-name").value = config.embedding_model_name;
+  el("cfg-embedding-base-url").value = config.embedding_base_url || "";
+  el("cfg-embedding-api-key").value = "";
+  el("cfg-embedding-api-key-clear").checked = false;
+  el("cfg-embedding-api-key").placeholder = config.embedding_api_key_set
+    ? config.embedding_api_key_hint : "尚未设置";
+  el("cfg-embedding-api-key-hint").textContent = config.embedding_api_key_set
+    ? `已配置：${config.embedding_api_key_hint}（留空表示不修改）` : "留空表示不修改";
+  el("cfg-qdrant-url").value = config.qdrant_url;
+  el("cfg-qdrant-api-key").value = "";
+  el("cfg-qdrant-api-key-clear").checked = false;
+  el("cfg-qdrant-api-key").placeholder = config.qdrant_api_key_set
+    ? config.qdrant_api_key_hint : "未设置（本地可用）";
+  el("cfg-qdrant-api-key-hint").textContent = config.qdrant_api_key_set
+    ? `已配置：${config.qdrant_api_key_hint}（留空表示不修改）` : "本地 Qdrant 无需 Key";
   setStatus("", "");
 }
 
@@ -291,11 +317,23 @@ function configPayload() {
     max_tokens: Number(el("cfg-max-tokens").value),
     context_window: Number(el("cfg-context-window").value),
     temperature: Number(el("cfg-temperature").value),
+    memory_enabled: el("cfg-memory-enabled").checked,
+    rag_enabled: el("cfg-rag-enabled").checked,
+    embedding_model_type: el("cfg-embedding-model-type").value,
+    embedding_model_name: el("cfg-embedding-model-name").value,
+    embedding_base_url: el("cfg-embedding-base-url").value,
+    qdrant_url: el("cfg-qdrant-url").value,
   };
   const key = el("cfg-api-key").value;
   if (key) {
     payload.api_key = key; // 留空 = 不改动已保存的 key
   }
+  const embeddingKey = el("cfg-embedding-api-key").value;
+  if (el("cfg-embedding-api-key-clear").checked) payload.embedding_api_key = "";
+  else if (embeddingKey) payload.embedding_api_key = embeddingKey;
+  const qdrantKey = el("cfg-qdrant-api-key").value;
+  if (el("cfg-qdrant-api-key-clear").checked) payload.qdrant_api_key = "";
+  else if (qdrantKey) payload.qdrant_api_key = qdrantKey;
   return payload;
 }
 
@@ -341,7 +379,7 @@ function renderBootstrap(bootstrap) {
   badge.classList.toggle("ready", model.configured);
   badge.title = `${model.provider} · ${model.base_url}`;
   el("model-hint").textContent = model.configured
-    ? ""
+    ? `Memory ${bootstrap.features.memory ? "开" : "关"} · RAG ${bootstrap.features.rag ? "开" : "关"}`
     : "尚未配置模型或 API Key → 点左下角「API 配置」，保存后立即生效。";
 }
 

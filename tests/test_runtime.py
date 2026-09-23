@@ -21,6 +21,7 @@ from myagent.config.settings import (
     Settings,
     SQLiteSettings,
 )
+from myagent.models.base import LLMResponse
 from myagent.models.openai_compat import OpenAICompatModel
 from myagent.runtime import build_agent, build_rag
 from myagent.session.manager import JsonlSessionStore
@@ -47,6 +48,27 @@ def test_build_agent_wires_the_default_implementations(tmp_path):
     assert isinstance(loop.sessions, JsonlSessionStore)
     assert isinstance(loop.tools, ToolRegistry)
     assert isinstance(loop.bus, MessageBus)
+
+
+async def test_llm_only_turn_does_not_call_embedding_or_qdrant(tmp_path, monkeypatch):
+    """A first chat works with neither optional service configured or running."""
+    from myagent.memory import vector_index as memory_vector_module
+    from myagent.rag import embedder as embedding_module
+    from myagent.rag import vectorstore as vector_module
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("optional vector service was used")
+
+    monkeypatch.setattr(embedding_module.OpenAICompatEmbedder, "embed", forbidden)
+    monkeypatch.setattr(vector_module.QdrantVectorStore, "search", forbidden)
+    monkeypatch.setattr(memory_vector_module.QdrantMemoryIndex, "search", forbidden)
+    model = ScriptedModel(LLMResponse(content="hello"))
+    loop = build_agent(settings(tmp_path), model=model)
+
+    turn = await loop.run_turn("hello", "cli:test")
+
+    assert turn.require_outbound().content == "hello"
+    assert len(model.requests) == 1
 
 
 def test_build_agent_reads_the_environment_when_no_settings_are_given(monkeypatch, tmp_path):

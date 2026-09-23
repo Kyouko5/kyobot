@@ -110,7 +110,7 @@ ENV_MEMORY_TOP_K: Final = "MYAGENT_MEMORY_TOP_K"
 ENV_MEMORY_MAX_TEXT_CHARS: Final = "MYAGENT_MEMORY_MAX_TEXT_CHARS"
 ENV_MEMORY_MAX_RECORDS_PER_TURN: Final = "MYAGENT_MEMORY_MAX_RECORDS_PER_TURN"
 
-DEFAULT_MEMORY_ENABLED: Final = True
+DEFAULT_MEMORY_ENABLED: Final = False
 DEFAULT_MEMORY_HALF_LIFE_DAYS: Final = 30.0
 DEFAULT_MEMORY_TOP_K: Final = 5
 DEFAULT_MEMORY_MAX_TEXT_CHARS: Final = 500
@@ -134,7 +134,7 @@ ENV_RAG_TOP_K: Final = "MYAGENT_RAG_TOP_K"
 # roughly 300–400 tokens, which fits a citation into a context budget without
 # cutting a paragraph in half, and 120 characters of overlap keeps the sentence
 # that straddles a boundary retrievable from both sides.
-DEFAULT_RAG_ENABLED: Final = True
+DEFAULT_RAG_ENABLED: Final = False
 DEFAULT_RAG_CHUNK_SIZE: Final = 800
 DEFAULT_RAG_CHUNK_OVERLAP: Final = 120
 DEFAULT_RAG_TOP_K: Final = 5

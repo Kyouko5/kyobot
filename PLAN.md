@@ -1846,6 +1846,19 @@ tests/gateway_helpers.py
 
 ---
 
+# Phase O：基础模式与可选 Memory / RAG
+
+目标：只配置 LLM 即可对话；Memory 和 RAG 由用户按需启用，网页端可编辑对应开关与连接参数。
+
+* [x] 默认关闭 Memory 和 RAG（`src/myagent/config/settings.py:113`、`src/myagent/config/settings.py:137`）。
+* [x] RAG 自动召回故障时跳过上下文，显式检索仍报错（`src/myagent/rag/pipeline.py:248`）。
+* [x] 网页配置支持开关、Embedding 与 Qdrant，密钥只回掩码并写入 `.env` 后重建 Agent（`src/myagent/gateway/config.py:108`、`src/myagent/gateway/app.py:131`）。
+* [x] 离线测试覆盖只有 LLM 的对话和可选能力的开关、降级与网页保存（`tests/test_runtime.py:53`、`tests/rag/test_pipeline.py:316`、`tests/gateway/test_app.py:282`）。
+
+结论：基础 Agent 无需 Embedding 与 Qdrant；开启可选能力时复用现有装配和配置路径。验收记录见 `docs/records/phase-o-optional-capabilities.md`。
+
+---
+
 # Phase 7：垂直领域 Agent
 
 ## 目标
