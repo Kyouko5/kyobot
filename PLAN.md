@@ -1894,16 +1894,14 @@ search_memory  只读   MemoryRetriever.search
 * 契约沿用 Phase 3 的 `BaseTool`（上游参照 `agent/tools/base.py:159`），注册走 `ToolRegistry`
   （`agent/tools/registry.py:19`）
 * `read_paper` 必须限制在 `data/papers/` 内（路径护栏思想对齐上游读文件工具 `agent/tools/filesystem.py:270`）
-* [ ] `tests/examples/test_research_tools.py`：5 个工具的 schema、参数校验、错误语义
+* [x] `tests/examples/test_research_tools.py`：5 个工具的 schema、参数校验、错误语义
       （`save_note` 用假 store，不打网络）
 
 ## 7.2 Agent 装配
 
-```python
-# examples/research_agent/agent.py
-def build_research_agent(settings: Settings) -> AgentLoop:
-    return build_agent(settings, tools=research_tools, system_prompt=RESEARCH_PROMPT)
-```
+`build_research_agent()` 位于 `src/myagent/research/agent.py:93`：通过
+`ResearchContextManager` 注入领域提示词和论文范围，并把领域工具、共享的 Memory / RAG
+实例注入 `build_agent()`。`examples/research_agent/agent.py` 公开同一入口。
 
 * 复用 Phase 3 的唯一装配入口 `build_agent()`；应用层只提供 **工具集合 + system prompt + 领域配置**
 * 会话用 `--session` 复用；跨 Session 演示靠 Memory，而不是把历史塞进 prompt
@@ -1936,7 +1934,7 @@ Research Agent（build_agent 装配）
 4. 用户偏好与关键结论用 save_note 落库，不要把无价值闲聊写进记忆
 ```
 
-* [ ] 引用可回跳：拿到 `[doc#idx]` 能在 `myagent docs show <doc>` 里定位到原文
+* [x] 引用可回跳：拿到 `[doc#idx]` 能在 `myagent docs show <doc>` 里定位到原文
 
 ## 7.5 CLI
 
@@ -1954,19 +1952,26 @@ examples/research_agent/
 ├── agent.py
 ├── tools.py
 ├── prompts.py
+├── offline_demo.py
+├── fixtures/*.pdf
 └── README.md
+src/myagent/research/                # 可安装应用实现；examples/ 为阅读入口
 docs/research-agent.md
 docs/records/phase-7-research-agent.md   # 4 个 Demo 的 transcript + token / 延迟
 ```
 
 ## 验收标准（4 个 Demo）
 
-* [ ] **Demo 1 单论文问答**：同一篇论文追问 3 个问题，答案均带引用，人工判定正确
-* [ ] **Demo 2 多论文比较**：`document_ids` 过滤生效，回答同时引用 ≥ 2 篇论文
-* [ ] **Demo 3 跨 Session Memory**：Session A 建立「研究方向 / 偏好」，新 Session 提问能召回
-* [ ] **Demo 4 RAG + Tool Calling**：一次对话内既检索论文，又调用 `save_note` / `search_memory`
-* [ ] 每个 Demo 记录轮数、工具调用次数、token、延迟（Phase 8 直接复用）
-* [ ] 拒答场景：问知识库里没有的内容时，明确回答「知识库中没有」，不编造事实
+* [x] **Demo 1 单论文问答**：同一篇论文追问 3 个问题，答案均带引用，人工判定正确
+* [x] **Demo 2 多论文比较**：`document_ids` 过滤生效，回答同时引用 ≥ 2 篇论文
+* [x] **Demo 3 跨 Session Memory**：Session A 建立「研究方向 / 偏好」，新 Session 提问能召回
+* [x] **Demo 4 RAG + Tool Calling**：一次对话内既检索论文，又调用 `save_note` / `search_memory`
+* [x] 每个 Demo 记录轮数、工具调用次数、token、延迟（Phase 8 直接复用）
+* [x] 拒答场景：问知识库里没有的内容时，明确回答「知识库中没有」，不编造事实
+
+结论：应用层接入五个论文/记忆工具和研究提示词，四个场景及拒答通过离线端到端演示；
+数字和边界见 `docs/records/phase-7-research-agent.md`。固定模型响应验证工具编排与引用路径，
+真实模型的遵循率留给 Phase 8 的 Evaluation。
 
 ---
 

@@ -11,6 +11,7 @@
     myagent ingest data/papers/*.pdf
     myagent search "GraphRAG 的核心思想" -k 5
     myagent docs list
+    myagent docs show <document_id> --chunk 0
     myagent docs delete <document_id>
     myagent session compact cli:default   # 把旧对话压成摘要检查点（Phase 6）
     myagent chat --show-context           # 打印这一轮各 section 的预算账本（Phase 6）
@@ -47,6 +48,7 @@ from myagent.rag.loader import LoaderError
 from myagent.rag.pipeline import RagPipeline, citation
 from myagent.rag.types import RetrievedChunk
 from myagent.rag.vectorstore import VectorStoreError
+from myagent.research.cli import add_research_parser, run_research
 from myagent.runtime import build_agent, build_memory, build_rag
 from myagent.session.base import DEFAULT_SESSION_KEY
 from myagent.session.manager import JsonlSessionStore
@@ -75,6 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _session(args)
     if args.command == "web":
         return _web(args)
+    if args.command == "research":
+        return run_research(args)
     return _chat(args)
 
 
@@ -102,6 +106,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_memory_parser(subcommands)
     _add_rag_parsers(subcommands)
     _add_session_parser(subcommands)
+    add_research_parser(subcommands)
     return parser
 
 
@@ -199,6 +204,9 @@ def _add_rag_parsers(subcommands: argparse._SubParsersAction[argparse.ArgumentPa
     docs = subcommands.add_parser("docs", help="list or delete ingested documents")
     verbs = docs.add_subparsers(dest="docs_command", required=True)
     verbs.add_parser("list", help="show the ingested documents")
+    show = verbs.add_parser("show", help="show stored chunks and citation anchors")
+    show.add_argument("document_id", help="the id shown by 'docs list'")
+    show.add_argument("--chunk", type=int, help="show only this zero-based chunk index")
     delete = verbs.add_parser("delete", help="forget one document and its vectors")
     delete.add_argument("document_id", help="the id shown by 'docs list'")
 
@@ -212,6 +220,8 @@ def _rag(args: argparse.Namespace) -> int:
         return _rag_search(pipeline, args)
     if args.docs_command == "list":
         return _rag_docs_list(pipeline)
+    if args.docs_command == "show":
+        return _rag_docs_show(pipeline, args)
     return _rag_docs_delete(pipeline, args)
 
 
@@ -270,6 +280,26 @@ def _rag_docs_list(pipeline: RagPipeline) -> int:
             f"{stamp}  {document.source}"
         )
     print(f"({len(documents)} document(s), {sum(d.chunks for d in documents)} chunk(s))")
+    return 0
+
+
+def _rag_docs_show(pipeline: RagPipeline, args: argparse.Namespace) -> int:
+    """Show the stored source text behind ``[document_id#index]`` citations."""
+    document = pipeline.store.document(args.document_id)
+    if document is None:
+        print(f"myagent: no document with id {args.document_id}", file=sys.stderr)
+        return 1
+    chunks = pipeline.store.chunks(args.document_id)
+    if args.chunk is not None:
+        chunks = [chunk for chunk in chunks if chunk.index == args.chunk]
+        if not chunks:
+            print(f"myagent: no chunk {args.chunk} in {args.document_id}", file=sys.stderr)
+            return 1
+    print(f"{document.title or Path(document.source).stem}  {document.source}")
+    for chunk in chunks:
+        page = chunk.metadata.get("page")
+        location = f"page {page}" if page is not None else "no page"
+        print(f"[{document.id}#{chunk.index}] {location}\n{chunk.text.strip()}\n")
     return 0
 
 

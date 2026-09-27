@@ -25,7 +25,7 @@
 | Phase 6 | Context Manager 重构：优先级与预算 | ✅ 已完成 |
 | Phase G | 浏览器 UI + 本地 Gateway（`myagent web`） | ✅ 已完成 |
 | Phase O | 基础模式与可选 Memory / RAG（含网页设置） | ✅ 已完成 |
-| Phase 7 | 垂直领域 Agent | ⬜ 未开始 |
+| Phase 7 | 垂直领域 Research Agent | ✅ 已完成 |
 | Phase 8 | Evaluation Pipeline | ⬜ 未开始 |
 | Phase 9 | 工程化：测试、Logging、Docker | ⬜ 未开始 |
 | Phase 10 | README / Demo / 简历包装 | ⬜ 未开始 |
@@ -58,6 +58,14 @@ myagent session compact cli:default          # 把旧轮换成一个摘要检查
 myagent web                  # 起本地 gateway 并打开 http://127.0.0.1:8080
 myagent web --port 9000 --no-open   # 换端口 / 不自动开浏览器
 myagent web --allow-remote   # 允许别的机器访问（无认证，会打印警告）
+
+# 7. 论文 Research Agent（需配置 Embedding 与 Qdrant）
+mkdir -p data/papers
+cp /path/to/paper.pdf data/papers/
+myagent research ingest data/papers/*.pdf
+myagent research ask "这篇论文解决了什么问题？" --paper <document_id>
+myagent research chat --session work
+myagent docs show <document_id> --chunk 0
 ```
 
 **基础模式只需要 LLM。** Memory 与 RAG 默认关闭；`myagent chat` 和 `myagent web` 无需
@@ -109,6 +117,14 @@ Phase 6 的 **Context Manager** 把记忆与文档正式接进 prompt，并把�
 细节见 [`docs/context-design.md`](./docs/context-design.md)
 与实验表 [`docs/records/phase-6-context.md`](./docs/records/phase-6-context.md)。
 
+Phase 7 的 **Research Agent** 在通用 Loop 外装配五个论文/记忆工具、专用提示词和 PDF 根目录
+限制；支持单篇追问、多篇比较、跨 Session 偏好与引用回跳。默认根目录为 `data/papers`
+（可设 `MYAGENT_PAPERS_DIR`）；`myagent research ingest` 只摄取该目录内的 PDF。
+四个离线端到端 Demo 和拒答可用
+`PYTHONPATH=src .venv/bin/python examples/research_agent/offline_demo.py --json` 复现。
+使用说明见 [`docs/research-agent.md`](./docs/research-agent.md)，
+transcript 与计量见 [`docs/records/phase-7-research-agent.md`](./docs/records/phase-7-research-agent.md)。
+
 > 如果 `myagent` 报 `ModuleNotFoundError: No module named 'myagent'`：本机 `.venv` 里的 `.pth`
 > 被 macOS 打上了 `hidden` 标志，Python 的 `site` 会读不到它。执行 `chflags -R nohidden .venv`
 > 即可（诊断细节见 [`docs/records/phase-3-refactor.md`](./docs/records/phase-3-refactor.md) §8.2）。
@@ -156,12 +172,14 @@ kyobot/
 │   ├── session/                # SessionStore 契约 + JSONL 实现（追加式 + last_archived）
 │   ├── memory/                 # 分层记忆：types / sqlite_store / vector_index / extractor / retriever / consolidator
 │   ├── rag/                    # 端到端 RAG：loader / chunker / embedder / vectorstore / store / retriever / reranker / pipeline
+│   ├── research/               # Phase 7 应用：Agent 装配 / 五个工具 / prompt / CLI
 │   ├── config/                 # .env 加载、Settings 单入口（LLM / Agent / SQLite / Qdrant / Embedding / Memory / RAG）
 │   ├── observability/          # 日志等可观测性基础件
 │   ├── tokens.py               # 全框架共用的 token 估算
 │   ├── gateway/                # 本地 Gateway + 浏览器 UI（Phase G/O）：server / app / config / runner / assets.py / errors.py + assets/（HTML/CSS/JS，零构建）
-│   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs|session|web（只调用 build_*）
-├── tests/                      # pytest 测试（809 项，覆盖率 100%；仅 gateway/test_server.py 绑 loopback）
+│   └── cli.py                  # myagent chat|tools|memory|ingest|search|docs|session|research|web
+├── examples/research_agent/    # 可读入口 / 两篇 PDF fixture / 离线四 Demo
+├── tests/                      # pytest 测试（849 项，覆盖率 100%；仅 gateway/test_server.py 绑 loopback）
 ├── workspace/                  # 工具的沙箱工作区（默认 AGENT_WORKSPACE）
 ├── docs/                       # 设计文档、ADR、阶段记录
 │   ├── design.md               # Framework V2 设计：模块地图 / 契约 / 装配图 / 差异表 / 答辩
@@ -173,10 +191,11 @@ kyobot/
 │   ├── memory-design.md        # 分层记忆：分层表 / 存储 / 写入策略 / 检索 / 巩固（Phase 4）
 │   ├── rag-design.md           # RAG：加载 / 切分 / 嵌入 / 向量库 / 检索 / 重排 / 引用（Phase 5）
 │   ├── context-design.md       # 上下文：优先级 / 预算 / 四步拟合 / 压缩 / 答辩（Phase 6）
+│   ├── research-agent.md       # 论文应用：配置 / 五个工具 / 引用与边界（Phase 7）
 │   ├── gateway-design.md       # 本地 Gateway 与浏览器 UI：请求路径 / 路由 / 安全边界 / 与上游对照（Phase G）
 │   ├── development.md          # 开发规范（代码 / 测试 / Git / 日志 / 文档）
 │   ├── decision-records/       # 架构决策记录（ADR）
-│   └── records/                # 阶段工作记录（含 phase-o-optional-capabilities.md）
+│   └── records/                # 阶段工作记录（含 Phase O / Phase 7）
 ├── scripts/                    # bootstrap.sh / check.sh / check_doc_anchors.py / memory_experiment.py / rag_experiment.py / context_experiment.py
 ├── .env / .env.example         # 本地密钥（忽略） / 键名模板（提交）
 ├── data/                       # 本地运行状态：会话 JSONL + 记忆 SQLite（git 忽略）
@@ -241,6 +260,12 @@ kyobot/
 - [`docs/decision-records/0011-local-gateway-and-webui.md`](./docs/decision-records/0011-local-gateway-and-webui.md)：为什么用标准库而不是 FastAPI/aiohttp、为什么不用 WebSocket、为什么前端零构建、loopback-only 与无认证的边界、`ChatRunner` 为什么必须存在。
 - [`docs/records/phase-g-gateway-webui.md`](./docs/records/phase-g-gateway-webui.md)：Phase G 工作记录（真实服务 transcript、无头 UI 冒烟、安全负例、质量门，以及五个实现中发现的真实问题）。
 - [`docs/records/phase-o-optional-capabilities.md`](./docs/records/phase-o-optional-capabilities.md)：Phase O 工作记录（默认关闭、运行时降级、网页配置与离线验收）。
+
+**Research Agent（Phase 7 产出）**
+
+- [`docs/research-agent.md`](./docs/research-agent.md)：论文目录配置、五个工具、按 ID 限定检索、引用回跳与使用边界。
+- [`examples/research_agent/README.md`](./examples/research_agent/README.md)：两篇 PDF 的四场景离线复现方法和真实命令行用法。
+- [`docs/records/phase-7-research-agent.md`](./docs/records/phase-7-research-agent.md)：四个 Demo 与拒答的 transcript、轮数、工具调用、估算 token 和延迟。
 
 > 文档里的 `file.py:行号` 均可用 `.venv/bin/python scripts/check_doc_anchors.py` 校验
 > （覆盖 `docs/`、`README.md` 与 `PLAN.md`），避免文档与源码脱节。

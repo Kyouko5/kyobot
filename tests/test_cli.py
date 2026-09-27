@@ -636,6 +636,23 @@ def test_docs_list_and_delete_manage_the_knowledge_base(capsys, tmp_path, cli_ra
     assert "no document with id" in capsys.readouterr().err
 
 
+def test_docs_show_resolves_a_citation_without_qdrant(capsys, tmp_path, cli_rag):
+    cli.main(["ingest", str(paper(tmp_path))])
+    document_id = cli_rag.documents()[0].id
+    capsys.readouterr()
+
+    assert cli.main(["docs", "show", document_id, "--chunk", "0"]) == 0
+    output = capsys.readouterr().out
+    assert f"[{document_id}#0] no page" in output
+    assert "GraphRAG walks a knowledge graph" in output
+    assert cli.main(["docs", "show", document_id]) == 0
+    assert f"[{document_id}#0]" in capsys.readouterr().out
+    assert cli.main(["docs", "show", document_id, "--chunk", "99"]) == 1
+    assert "no chunk 99" in capsys.readouterr().err
+    assert cli.main(["docs", "show", "unknown"]) == 1
+    assert "no document with id" in capsys.readouterr().err
+
+
 def test_docs_delete_explains_a_dead_vector_store(capsys, tmp_path, cli_rag):
     from fakes import DictionaryVectorStore
     from myagent.rag.vectorstore import VectorStoreError

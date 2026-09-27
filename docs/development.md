@@ -54,6 +54,7 @@ api_key = require_env("MYAGENT_LLM_API_KEY")  # 未填则抛 MissingEnvError
 | `MYAGENT_SQLITE_PATH` | 文档与元数据库文件（ADR-0003） | `data/myagent.db` |
 | `MYAGENT_QDRANT_URL` / `_API_KEY` / `_COLLECTION` / `_PREFER_GRPC` | 可选向量库连接（ADR-0003） | `http://localhost:6333` / 空 / `myagent_documents` / `false` |
 | `MYAGENT_MEMORY_ENABLED` / `MYAGENT_RAG_ENABLED` | 可选自动记忆与文档召回 | `false` / `false` |
+| `MYAGENT_PAPERS_DIR` | Research Agent 可摄取和读取的 PDF 根目录（Phase 7） | `data/papers` |
 | `COHERE_API_KEY`、`TAVILY_API_KEY` | 可选：Reranker（Phase 5.7）、Web 工具（Phase 7） | 无 |
 
 约定：
